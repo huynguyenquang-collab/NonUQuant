@@ -1247,7 +1247,7 @@ def build_parser():
     parser.add_argument("--lm-eval-tasks", nargs="+", default=["arc_easy", "arc_challenge"])
     parser.add_argument("--lm-eval-num-fewshot", type=int, default=None)
     parser.add_argument("--lm-eval-batch-size", default="auto")
-    parser.add_argument("--lm-eval-limit", type=float, default=100)
+    parser.add_argument("--lm-eval-limit", type=lambda x: None if float(x) <= 0 else float(x), default=100)
     parser.add_argument("--lm-eval-output-dir", default="./outputs/gptvq_1d_rbvt_colab/lm_eval")
     parser.add_argument("--cleanup-model-artifacts", action="store_true", default=True)
     parser.add_argument("--keep-model-artifacts", dest="cleanup_model_artifacts", action="store_false")
