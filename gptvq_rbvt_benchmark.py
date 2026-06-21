@@ -340,6 +340,7 @@ def _apply_ncc_sweeps(
     mu: torch.Tensor,
     mu_var: torch.Tensor | None,
     args,
+    sigma_ii: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict]:
     apply_ncc = _load_ncc_apply()
     current = qres
@@ -358,6 +359,9 @@ def _apply_ncc_sweeps(
             use_james_stein=args.ncc_use_james_stein,
             mu_var=mu_var,
             row_chunk=args.row_chunk,
+            score=args.ncc_score,
+            sigma_ii=sigma_ii if args.ncc_score == "cov" else None,
+            cov_eps=args.ncc_cov_eps,
         )
         bias_before = float(stats.bias_before)
         bias_after = float(stats.bias_after)
@@ -724,8 +728,9 @@ def quantize_model_gptvq_1d(
                             W_fp=W_fp.to(device),
                             qres=qres,
                             mu=mu,
-                            mu_var=sigma,
+                            mu_var=(sigma / count) if args.ncc_use_james_stein else None,
                             args=args,
+                            sigma_ii=sigma,
                         )
                     else:
                         raise ValueError(f"Unknown correction: {correction}")
@@ -805,6 +810,8 @@ def quantize_model_gptvq_1d(
             stats["ncc_sweeps"] = args.ncc_sweeps
             stats["ncc_stop_eps"] = args.ncc_stop_eps
             stats["ncc_use_james_stein"] = args.ncc_use_james_stein
+            stats["ncc_score"] = args.ncc_score
+            stats["ncc_cov_eps"] = args.ncc_cov_eps
             stats["ncc_sweep_history"] = ncc_sweep_history
         stats["activation_error_diagnostics"] = diagnostics
         print(
@@ -1223,6 +1230,13 @@ def build_parser():
         default=False,
         help="Use NCCQuant's James-Stein activation-mean shrinkage option.",
     )
+    parser.add_argument(
+        "--ncc-score",
+        choices=["lite", "cov"],
+        default="lite",
+        help="NCC scoring rule: 'lite' uses |mu|/g; 'cov' uses |mu|/((sigma_ii+eps)*g).",
+    )
+    parser.add_argument("--ncc-cov-eps", type=float, default=1e-6)
     parser.add_argument("--gap-floor", type=float, default=1e-8)
     parser.add_argument("--strict-descent", action="store_true", default=True)
     parser.add_argument("--allow-overshoot", dest="strict_descent", action="store_false")
