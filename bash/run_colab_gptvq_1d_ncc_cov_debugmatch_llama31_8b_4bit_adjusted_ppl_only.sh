@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # run_colab_gptvq_1d_ncc_cov_debugmatch_llama31_8b_4bit_adjusted_ppl_only.sh
 #
-# PPL-only version of run_colab_gptvq_1d_ncc_cov_debugmatch_llama31_8b_4bit.sh
-# with one intended method change: NCC corrects against the
-# **error-feedback-adjusted** baseline (baseline=adjusted) instead of the
-# original FP16 weights.
+# Same as run_colab_gptvq_1d_ncc_cov_debugmatch_llama31_8b_4bit.sh, with one
+# intended method change: NCC corrects against the **error-feedback-adjusted**
+# baseline (baseline=adjusted) instead of the original FP16 weights.
 #
 # "adjusted" baseline:  e_j = W_gptvq_j - W_adj_j   (residual w.r.t. the
 #   adjusted weight, so |e| <= g/2 by construction; NCC flips minimise the
@@ -12,7 +11,6 @@
 # "original" baseline:  e_j = W_gptvq_j - W_fp_j   (true inference error;
 #   end-to-end first-moment target matching the paper's stated objective).
 #
-# Only PPL (WikiText-2 + C4) is evaluated; lm-eval harness is disabled.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -29,7 +27,7 @@ RUN_SETUP="${RUN_SETUP:-1}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 MODEL="${MODEL:-meta-llama/Meta-Llama-3.1-8B}"
 DEVICE="${DEVICE:-cuda:0}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-outputs/gptvq_1d_ncc_cov_debugmatch_adjusted_llama31_8b_4bit_ppl_only}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-outputs/gptvq_1d_ncc_cov_debugmatch_adjusted_llama31_8b_4bit}"
 
 N_CALIB="${N_CALIB:-128}"
 MAX_LENGTH="${MAX_LENGTH:-512}"
@@ -48,11 +46,14 @@ NCC_SCORE="${NCC_SCORE:-cov}"
 NCC_COV_EPS="${NCC_COV_EPS:-1e-6}"
 DIAGNOSTIC_LAYER_LIMIT="${DIAGNOSTIC_LAYER_LIMIT:-6}"
 DIAGNOSTIC_MAX_TOKENS="${DIAGNOSTIC_MAX_TOKENS:-4096}"
+LM_EVAL_BATCH_SIZE="${LM_EVAL_BATCH_SIZE:-auto}"
+LM_EVAL_LIMIT="${LM_EVAL_LIMIT:-}"
+LM_EVAL_TASKS="${LM_EVAL_TASKS:-arc_challenge arc_easy boolq hellaswag lambada_openai openbookqa piqa rte winogrande mmlu}"
 
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
-echo "=== GPTVQ-1D+NCC-Cov debug-matched adjusted-baseline PPL only | Llama-3.1-8B | 4-bit ==="
+echo "=== GPTVQ-1D+NCC-Cov debug-matched adjusted-baseline | Llama-3.1-8B | 4-bit ==="
 echo "Model: $MODEL"
 echo "Output: $OUTPUT_ROOT"
 echo "Calibration: $CALIB_DATASET n=$N_CALIB len=$MAX_LENGTH"
@@ -61,8 +62,9 @@ echo "GPTVQ EM/k-means iterations: $KMEANS_ITERS"
 echo "NCC placement: post_module | score=$NCC_SCORE | budget_p=$NCC_BUDGET_P | sweeps=$NCC_SWEEPS"
 echo "NCC baseline: adjusted (only method change vs debug-matched NCC run)"
 echo "Eval only corrected variant: gptvq_ncc"
-echo "PPL only: WikiText-2/C4 eval_samples=$EVAL_SAMPLES len=$EVAL_MAX_LENGTH stride=$EVAL_STRIDE"
-echo "LM-eval: disabled"
+echo "PPL: WikiText-2/C4 eval_samples=$EVAL_SAMPLES len=$EVAL_MAX_LENGTH stride=$EVAL_STRIDE"
+echo "LM-eval tasks: $LM_EVAL_TASKS"
+echo "GSM8K: disabled"
 
 if [ "$RUN_SETUP" = "1" ]; then
   "$PYTHON_BIN" -m pip install -q -r requirements.txt
@@ -98,34 +100,45 @@ print("GPTVQ import smoke check passed.")
 print("NCCQuant source present: NCCQuant/quantizers/ncc.py")
 PY
 
-"$PYTHON_BIN" gptvq_rbvt_benchmark.py \
-  --model-path "$MODEL" \
-  --device "$DEVICE" \
-  --output-root "$OUTPUT_ROOT" \
-  --variants gptvq_ncc \
-  --correction ncc \
-  --ncc-placement post_module \
-  --keep-model-on-device \
-  --wbits 4 \
-  --groupsize "$GROUPSIZE" \
-  --gptq-blocksize "$GPTQ_BLOCKSIZE" \
-  --percdamp 0.01 \
-  --kmeans-iters "$KMEANS_ITERS" \
-  --kmeans-init-method mahalanobis \
-  --assignment-chunk-size "$ASSIGNMENT_CHUNK_SIZE" \
-  --n-calib "$N_CALIB" \
-  --max-length "$MAX_LENGTH" \
-  --calib-dataset "$CALIB_DATASET" \
-  --eval-samples "$EVAL_SAMPLES" \
-  --eval-max-length "$EVAL_MAX_LENGTH" \
-  --eval-stride "$EVAL_STRIDE" \
-  --no-lm-eval \
-  --ncc-budget-p "$NCC_BUDGET_P" \
-  --ncc-sweeps "$NCC_SWEEPS" \
-  --ncc-stop-eps "$NCC_STOP_EPS" \
-  --ncc-score "$NCC_SCORE" \
-  --ncc-cov-eps "$NCC_COV_EPS" \
-  --baseline adjusted \
-  --diagnostic-layer-limit "$DIAGNOSTIC_LAYER_LIMIT" \
-  --diagnostic-max-tokens "$DIAGNOSTIC_MAX_TOKENS" \
+COMMON_ARGS=(
+  --model-path "$MODEL"
+  --device "$DEVICE"
+  --output-root "$OUTPUT_ROOT"
+  --variants gptvq_ncc
+  --correction ncc
+  --ncc-placement post_module
+  --keep-model-on-device
+  --wbits 4
+  --groupsize "$GROUPSIZE"
+  --gptq-blocksize "$GPTQ_BLOCKSIZE"
+  --percdamp 0.01
+  --kmeans-iters "$KMEANS_ITERS"
+  --kmeans-init-method mahalanobis
+  --assignment-chunk-size "$ASSIGNMENT_CHUNK_SIZE"
+  --n-calib "$N_CALIB"
+  --max-length "$MAX_LENGTH"
+  --calib-dataset "$CALIB_DATASET"
+  --eval-samples "$EVAL_SAMPLES"
+  --eval-max-length "$EVAL_MAX_LENGTH"
+  --eval-stride "$EVAL_STRIDE"
+  --include-lm-eval
+  --lm-eval-batch-size "$LM_EVAL_BATCH_SIZE"
+  --lm-eval-output-dir "$OUTPUT_ROOT/lm_eval"
+  --ncc-budget-p "$NCC_BUDGET_P"
+  --ncc-sweeps "$NCC_SWEEPS"
+  --ncc-stop-eps "$NCC_STOP_EPS"
+  --ncc-score "$NCC_SCORE"
+  --ncc-cov-eps "$NCC_COV_EPS"
+  --baseline adjusted
+  --diagnostic-layer-limit "$DIAGNOSTIC_LAYER_LIMIT"
+  --diagnostic-max-tokens "$DIAGNOSTIC_MAX_TOKENS"
   --cleanup-model-artifacts
+)
+
+if [ -n "$LM_EVAL_LIMIT" ]; then
+  COMMON_ARGS+=(--lm-eval-limit "$LM_EVAL_LIMIT")
+fi
+read -r -a LM_EVAL_TASK_ARRAY <<< "$LM_EVAL_TASKS"
+COMMON_ARGS+=(--lm-eval-tasks "${LM_EVAL_TASK_ARRAY[@]}")
+
+"$PYTHON_BIN" gptvq_rbvt_benchmark.py "${COMMON_ARGS[@]}"
