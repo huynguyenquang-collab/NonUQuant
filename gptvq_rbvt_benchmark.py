@@ -1194,6 +1194,12 @@ def build_parser():
     parser.add_argument("--rbvt-topk", type=int, default=0)
     parser.add_argument("--ncc-budget-p", type=float, default=0.02)
     parser.add_argument(
+        "--baseline",
+        choices=["original", "adjusted"],
+        default="original",
+        help="Baseline for NCC correction: 'original' = layer.weight before quant, 'adjusted' = error-feedback adjusted weights.",
+    )
+    parser.add_argument(
         "--ncc-placement",
         choices=["post_module", "post_block"],
         default="post_module",
