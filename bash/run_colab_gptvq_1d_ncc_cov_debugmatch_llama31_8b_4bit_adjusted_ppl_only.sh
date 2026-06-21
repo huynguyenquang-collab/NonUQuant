@@ -28,7 +28,8 @@ RUN_SETUP="${RUN_SETUP:-1}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 MODEL="${MODEL:-meta-llama/Meta-Llama-3.1-8B}"
 DEVICE="${DEVICE:-cuda:0}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-outputs/gptvq_1d_ncc_cov_debugmatch_adjusted_llama31_8b_4bit}"
+WBITS="${WBITS:-3}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-outputs/gptvq_1d_ncc_cov_debugmatch_adjusted_llama31_8b_${WBITS}bit_ppl_only}"
 
 N_CALIB="${N_CALIB:-128}"
 MAX_LENGTH="${MAX_LENGTH:-512}"
@@ -45,20 +46,22 @@ NCC_SWEEPS="${NCC_SWEEPS:-1}"
 NCC_STOP_EPS="${NCC_STOP_EPS:-0.0}"
 NCC_SCORE="${NCC_SCORE:-cov}"
 NCC_COV_EPS="${NCC_COV_EPS:-1e-6}"
-DIAGNOSTIC_LAYER_LIMIT="${DIAGNOSTIC_LAYER_LIMIT:-6}"
+DIAGNOSTIC_LAYER_LIMIT="${DIAGNOSTIC_LAYER_LIMIT:-0}"
 DIAGNOSTIC_MAX_TOKENS="${DIAGNOSTIC_MAX_TOKENS:-4096}"
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
-echo "=== GPTVQ-1D vs GPTVQ-1D+NCC-Cov adjusted-baseline PPL only | Llama-3.1-8B | 4-bit ==="
+echo "=== GPTVQ-1D vs GPTVQ-1D+NCC-Cov adjusted-baseline PPL only | Llama-3.1-8B | ${WBITS}-bit ==="
 echo "Model: $MODEL"
 echo "Output: $OUTPUT_ROOT"
 echo "Calibration: $CALIB_DATASET n=$N_CALIB len=$MAX_LENGTH"
+echo "Bits: $WBITS"
 echo "GPTQ blocksize: $GPTQ_BLOCKSIZE | groupsize=$GROUPSIZE"
 echo "GPTVQ EM/k-means iterations: $KMEANS_ITERS"
 echo "NCC placement: post_module | score=$NCC_SCORE | budget_p=$NCC_BUDGET_P | sweeps=$NCC_SWEEPS"
 echo "NCC baseline: adjusted"
 echo "Variants: gptvq gptvq_ncc"
+echo "Quantization/eval layers: full model"
 echo "PPL only: WikiText-2/C4 eval_samples=$EVAL_SAMPLES len=$EVAL_MAX_LENGTH stride=$EVAL_STRIDE"
 echo "LM-eval: disabled"
 
@@ -104,7 +107,7 @@ COMMON_ARGS=(
   --correction ncc
   --ncc-placement post_module
   --keep-model-on-device
-  --wbits 4
+  --wbits "$WBITS"
   --groupsize "$GROUPSIZE"
   --gptq-blocksize "$GPTQ_BLOCKSIZE"
   --percdamp 0.01
