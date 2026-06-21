@@ -551,6 +551,7 @@ def quantize_model_gptvq_1d(
     correction: str | None,
     gptvq_state: dict[str, torch.Tensor | str] | None = None,
     gptvq_snapshot_dir: Path | None = None,
+    gptvq_cache_dir: Path | None = None,
 ) -> dict:
     device = _hf_device(args.device)
     if not hasattr(model, "model") or not hasattr(model.model, "layers"):
@@ -575,6 +576,35 @@ def quantize_model_gptvq_1d(
     layers = model.model.layers
     use_cache = model.config.use_cache
     model.config.use_cache = False
+
+    # ── GPTVQ weight cache ────────────────────────────────────────────────────
+    # When gptvq_cache_dir is set and a completed cache is found, we skip the
+    # expensive GPTVQ fasterquant (and Hessian accumulation) and instead load
+    # pre-quantized weights + block codebooks from disk. Only the lightweight
+    # activation-stat collection (for NCC mu/sigma) is re-run.
+    _from_cache = False
+    _cache_orig_W: dict[str, torch.Tensor] = {}  # key → original FP32 weight (cpu)
+
+    if gptvq_cache_dir is not None:
+        gptvq_cache_dir = Path(gptvq_cache_dir)
+        _sentinel = gptvq_cache_dir / "_cache_complete"
+        if _sentinel.exists():
+            _from_cache = True
+            print(f"[GPTVQ cache] HIT – loading pre-quantized weights from {gptvq_cache_dir}")
+            for _li, _layer in enumerate(layers):
+                _full_li = find_layers(_layer)
+                for _nm, _mod in _full_li.items():
+                    _k = _linear_key(_li, _nm)
+                    _fpath = gptvq_cache_dir / f"{_k.replace('.', '_')}.pt"
+                    if not _fpath.exists():
+                        raise RuntimeError(f"[GPTVQ cache] Missing cache file: {_fpath}")
+                    _snap = torch.load(_fpath, map_location="cpu", weights_only=True)
+                    _cache_orig_W[_k] = _mod.weight.data.detach().cpu().clone()
+                    _mod.weight.data = _snap["W_dequant"].to(_mod.weight.data.dtype)
+                del _full_li
+        else:
+            print(f"[GPTVQ cache] MISS – will run GPTVQ and save to {gptvq_cache_dir}")
+            gptvq_cache_dir.mkdir(parents=True, exist_ok=True)
 
     totals = {
         "flips": 0,
@@ -605,16 +635,21 @@ def quantize_model_gptvq_1d(
             stat_sumsq: Dict[str, torch.Tensor] = {}
             stat_count: Dict[str, int] = {}
 
-            for name, module in subset.items():
-                gptq[name] = GPTQ(module)
-                gptq[name].quantizer = _make_vq_quantizer(args)
+            # When loading from cache we skip Hessian accumulation entirely;
+            # GPTQ objects are only created for the standard (non-cache) path.
+            if not _from_cache:
+                for name, module in subset.items():
+                    gptq[name] = GPTQ(module)
+                    gptq[name].quantizer = _make_vq_quantizer(args)
 
             def add_batch(name):
                 key = _linear_key(layer_idx, name)
 
                 def hook(_module, inp, out):
                     x = inp[0] if isinstance(inp, tuple) else inp
-                    gptq[name].add_batch(x.data, out.data)
+                    # Hessian accumulation only needed for fasterquant (non-cache path)
+                    if not _from_cache:
+                        gptq[name].add_batch(x.data, out.data)
                     if correction is not None:
                         _append_diagnostic_inputs(
                             key=key,
@@ -642,10 +677,22 @@ def quantize_model_gptvq_1d(
 
             for name, module in subset.items():
                 key = _linear_key(layer_idx, name)
-                W_fp = module.weight.data.detach().clone().float()
-                print(f"Quantizing {key} with upstream GPTVQ-1D ...")
+                # When loading from cache: module.weight is already the pre-quantized
+                # GPTVQ weight (loaded during preload above); use stored original as W_fp.
+                if _from_cache:
+                    W_fp = _cache_orig_W[key].to(device=device, dtype=torch.float32)
+                else:
+                    W_fp = module.weight.data.detach().clone().float()
                 post_block_ncc = correction == "ncc" and args.ncc_placement == "post_block"
-                if post_block_ncc:
+                if post_block_ncc and _from_cache:
+                    raise RuntimeError(
+                        "--ncc-placement post_block requires GPTQ state and is "
+                        "incompatible with --gptvq-cache-dir cache loading."
+                    )
+                if _from_cache:
+                    print(f"[cache] Skipping fasterquant for {key} (loaded from cache)")
+                    quantized_layers += 1
+                elif post_block_ncc:
                     if key not in stat_sum:
                         raise RuntimeError(f"Missing activation stats for NCC layer {key}")
                     count = max(1, stat_count[key])
@@ -659,6 +706,7 @@ def quantize_model_gptvq_1d(
                     for row in ncc_stats["sweep_history"]:
                         ncc_sweep_history.append({"layer": key, **row})
                     del mu
+                    quantized_layers += 1
                 else:
                     gptq[name].fasterquant(
                         blocksize=args.gptq_blocksize,
@@ -672,7 +720,27 @@ def quantize_model_gptvq_1d(
                         hessian_weighted_lookups=args.hessian_weighted_lookups,
                         only_init_kmeans=False,
                     )
-                quantized_layers += 1
+                    quantized_layers += 1
+                    # ── save GPTVQ weights + codebooks to cache ──────────────
+                    if gptvq_cache_dir is not None:
+                        _W_save = module.weight.data.detach().float()
+                        _qres_save = _gptvq_quant_result(
+                            W_dequant=_W_save,
+                            assignments=gptq[name].assignments,
+                            centroids=gptq[name].quantizer.all_centroids,
+                            bits=args.wbits,
+                            block_size=args.groupsize,
+                        )
+                        _fpath_save = gptvq_cache_dir / f"{key.replace('.', '_')}.pt"
+                        torch.save(
+                            {
+                                "W_dequant": _W_save.cpu(),
+                                "block_codebooks": _qres_save.block_codebooks.cpu(),
+                                "block_size": args.groupsize,
+                            },
+                            _fpath_save,
+                        )
+                        del _W_save, _qres_save
                 if gptvq_state is not None:
                     snapshot = module.weight.data.detach().cpu().clone()
                     if gptvq_snapshot_dir is not None:
@@ -700,13 +768,29 @@ def quantize_model_gptvq_1d(
                     if key not in stat_sum:
                         raise RuntimeError(f"Missing activation stats for {correction.upper()} layer {key}")
                     W_gptvq = module.weight.data.detach().float()
-                    qres = _gptvq_quant_result(
-                        W_dequant=W_gptvq,
-                        assignments=gptq[name].assignments,
-                        centroids=gptq[name].quantizer.all_centroids,
-                        bits=args.wbits,
-                        block_size=args.groupsize,
-                    )
+                    if _from_cache:
+                        # Reconstruct QuantResult from cached codebooks.
+                        _fpath_c = gptvq_cache_dir / f"{key.replace('.', '_')}.pt"
+                        _snap_c = torch.load(_fpath_c, map_location=device, weights_only=True)
+                        qres = QuantResult(
+                            W_dequant=W_gptvq,
+                            indices=None,
+                            q_levels=torch.linspace(-1.0, 1.0, 2**args.wbits, device=device),
+                            block_scales=_snap_c["block_codebooks"].abs().amax(dim=-1).clamp_min(1e-12),
+                            block_size=_snap_c["block_size"],
+                            block_codebooks=_snap_c["block_codebooks"],
+                            block_zeros=None,
+                        )
+                        qres = _refresh_quant_indices_from_dequant(qres, W_gptvq)
+                        del _snap_c
+                    else:
+                        qres = _gptvq_quant_result(
+                            W_dequant=W_gptvq,
+                            assignments=gptq[name].assignments,
+                            centroids=gptq[name].quantizer.all_centroids,
+                            bits=args.wbits,
+                            block_size=args.groupsize,
+                        )
                     count = max(1, stat_count[key])
                     mu = stat_sum[key].to(device) / count
                     ex2 = stat_sumsq[key].to(device) / count
@@ -769,7 +853,8 @@ def quantize_model_gptvq_1d(
                             ncc_sweep_history.append({"layer": key, **row})
                     del qres, W_corr, sigma, mu
 
-                gptq[name].free()
+                if not _from_cache and name in gptq:
+                    gptq[name].free()
                 del W_fp
                 torch.cuda.empty_cache()
 
@@ -784,6 +869,12 @@ def quantize_model_gptvq_1d(
         torch.cuda.empty_cache()
         gc.collect()
         inps, outs = outs, inps
+
+    # Write sentinel only after all layers are successfully cached.
+    if gptvq_cache_dir is not None and not _from_cache:
+        _sentinel_path = gptvq_cache_dir / "_cache_complete"
+        _sentinel_path.write_text("done")
+        print(f"[GPTVQ cache] Saved {quantized_layers} layers to {gptvq_cache_dir}")
 
     model.config.use_cache = use_cache
     elapsed = time.time() - tick
@@ -942,12 +1033,14 @@ def run_variant(variant: str, args, hf_token: str | None):
         seed=args.seed,
         cache_dir=args.calibration_cache_dir,
     )
+    gptvq_cache = Path(args.gptvq_cache_dir) if args.gptvq_cache_dir else None
     quant_stats = quantize_model_gptvq_1d(
         model=model,
         tokenizer=tokenizer,
         calib_texts=calib_texts,
         args=args,
         correction=correction,
+        gptvq_cache_dir=gptvq_cache,
     )
 
     print(f"Saving {label} model to {output_dir} ...")
@@ -1265,6 +1358,19 @@ def build_parser():
     parser.add_argument("--lm-eval-output-dir", default="./outputs/gptvq_1d_rbvt_colab/lm_eval")
     parser.add_argument("--cleanup-model-artifacts", action="store_true", default=True)
     parser.add_argument("--keep-model-artifacts", dest="cleanup_model_artifacts", action="store_false")
+    parser.add_argument(
+        "--gptvq-cache-dir",
+        default="",
+        help=(
+            "Directory for caching GPTVQ-quantized weights and block codebooks. "
+            "On first run (cache MISS) GPTVQ runs normally and saves per-layer "
+            '"<key>.pt" files plus a "_cache_complete" sentinel. '
+            "On subsequent runs (cache HIT) fasterquant and Hessian accumulation "
+            "are skipped; only the lightweight activation-stat collection for NCC "
+            "mu/sigma is re-run. Useful for iterating over NCC hyperparameters "
+            "without repeating the expensive GPTVQ pass."
+        ),
+    )
     return parser
 
 
