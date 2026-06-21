@@ -30,6 +30,7 @@ MODEL="${MODEL:-meta-llama/Meta-Llama-3.1-8B}"
 DEVICE="${DEVICE:-cuda:0}"
 WBITS="${WBITS:-3}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-outputs/gptvq_1d_ncc_cov_debugmatch_adjusted_llama31_8b_${WBITS}bit_ppl_only}"
+NCC_BRANCH="${NCC_BRANCH:-asyn}"
 
 N_CALIB="${N_CALIB:-128}"
 MAX_LENGTH="${MAX_LENGTH:-512}"
@@ -60,6 +61,7 @@ echo "GPTQ blocksize: $GPTQ_BLOCKSIZE | groupsize=$GROUPSIZE"
 echo "GPTVQ EM/k-means iterations: $KMEANS_ITERS"
 echo "NCC placement: post_module | score=$NCC_SCORE | budget_p=$NCC_BUDGET_P | sweeps=$NCC_SWEEPS"
 echo "NCC baseline: adjusted"
+echo "NCCQuant branch: $NCC_BRANCH"
 echo "Compare mode: single GPTVQ pass -> save/eval gptvq and gptvq_ncc"
 echo "Quantization/eval layers: full model"
 echo "PPL only: WikiText-2/C4 eval_samples=$EVAL_SAMPLES len=$EVAL_MAX_LENGTH stride=$EVAL_STRIDE"
@@ -76,9 +78,11 @@ else
 fi
 
 if [[ ! -d NCCQuant/.git ]]; then
-  git clone https://github.com/anhnda/NCCQuant.git NCCQuant
+  git clone -b "$NCC_BRANCH" https://github.com/anhnda/NCCQuant.git NCCQuant
 else
-  git -C NCCQuant pull --ff-only
+  git -C NCCQuant fetch origin "$NCC_BRANCH"
+  git -C NCCQuant checkout "$NCC_BRANCH"
+  git -C NCCQuant pull --ff-only origin "$NCC_BRANCH"
 fi
 
 "$PYTHON_BIN" - <<'PY'
