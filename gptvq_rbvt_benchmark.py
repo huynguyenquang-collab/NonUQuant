@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import gc
 import importlib.util
+import inspect
 import json
 import random
 import shutil
@@ -56,6 +57,8 @@ from runtime_utils import build_model_slug, load_runtime_env, resolve_hf_token  
 
 
 _NCC_APPLY = None
+_NCC_APPLY_PARAMS: set[str] | None = None
+_NCC_COMPAT_WARNED = False
 
 
 def _hf_device(device: str) -> torch.device:
@@ -279,6 +282,7 @@ def _activation_error_metrics(
 
 def _load_ncc_apply():
     global _NCC_APPLY
+    global _NCC_APPLY_PARAMS
     if _NCC_APPLY is not None:
         return _NCC_APPLY
     ncc_file = NCC_ROOT / "quantizers" / "ncc.py"
@@ -299,6 +303,7 @@ def _load_ncc_apply():
     sys.modules[f"{package_name}.ncc"] = module
     spec.loader.exec_module(module)
     _NCC_APPLY = module.apply_ncc
+    _NCC_APPLY_PARAMS = set(inspect.signature(module.apply_ncc).parameters.keys())
     return _NCC_APPLY
 
 
@@ -343,6 +348,7 @@ def _apply_ncc_sweeps(
     sigma_ii: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict]:
     apply_ncc = _load_ncc_apply()
+    global _NCC_COMPAT_WARNED
     current = qres
     W_corr = qres.W_dequant
     history = []
@@ -351,18 +357,35 @@ def _apply_ncc_sweeps(
     final_bias_after = None
 
     for sweep_idx in range(args.ncc_sweeps):
-        W_corr, stats = apply_ncc(
-            W_fp=W_fp,
-            qres=current,
-            mu=mu,
-            budget_p=args.ncc_budget_p,
-            use_james_stein=args.ncc_use_james_stein,
-            mu_var=mu_var,
-            row_chunk=args.row_chunk,
-            score=args.ncc_score,
-            sigma_ii=sigma_ii if args.ncc_score == "cov" else None,
-            cov_eps=args.ncc_cov_eps,
-        )
+        params = _NCC_APPLY_PARAMS if _NCC_APPLY_PARAMS is not None else set(inspect.signature(apply_ncc).parameters.keys())
+        call_kwargs = {
+            "W_fp": W_fp,
+            "qres": current,
+            "mu": mu,
+            "budget_p": args.ncc_budget_p,
+            "use_james_stein": args.ncc_use_james_stein,
+            "mu_var": mu_var,
+            "row_chunk": args.row_chunk,
+        }
+        if "score" in params:
+            call_kwargs["score"] = args.ncc_score
+            if "sigma_ii" in params:
+                call_kwargs["sigma_ii"] = sigma_ii if args.ncc_score == "cov" else None
+            if "cov_eps" in params:
+                call_kwargs["cov_eps"] = args.ncc_cov_eps
+        else:
+            # Backward compatibility with older NCCQuant that does not expose
+            # score/cov options in apply_ncc.
+            if args.ncc_score != "lite" and not _NCC_COMPAT_WARNED:
+                print(
+                    "[NCC compat] apply_ncc() from current NCCQuant does not support "
+                    "'score'. Falling back to legacy behavior (equivalent to NCC-Lite)."
+                )
+                _NCC_COMPAT_WARNED = True
+
+        # Keep only kwargs supported by the loaded NCCQuant implementation.
+        call_kwargs = {k: v for k, v in call_kwargs.items() if k in params}
+        W_corr, stats = apply_ncc(**call_kwargs)
         bias_before = float(stats.bias_before)
         bias_after = float(stats.bias_after)
         improvement = bias_before - bias_after
