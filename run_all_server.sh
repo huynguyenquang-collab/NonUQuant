@@ -31,11 +31,13 @@ cd "$WORKDIR"
 
 # GPTVQ submodule
 if [ ! -d "GPTVQ/.git" ]; then
+    rm -rf GPTVQ
     git clone https://github.com/Qualcomm-AI-research/gptvq.git GPTVQ
 fi
 
 # NCCQuant submodule
 if [ ! -d "NCCQuant/.git" ]; then
+    rm -rf NCCQuant
     git clone https://github.com/anhnda/NCCQuant.git NCCQuant
 fi
 
