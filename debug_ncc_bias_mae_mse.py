@@ -285,7 +285,6 @@ def main():
                     svd_rank=None,
                     hessian_weighted_lookups=args.hessian_weighted_lookups,
                     only_init_kmeans=False,
-                    capture_w_assigned=(args.baseline == "adjusted"),
                 )
                 W_gptvq = module.weight.data.detach().float().clone()
 
