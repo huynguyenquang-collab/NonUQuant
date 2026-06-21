@@ -23,7 +23,7 @@ python3 -c "import torch; print('torch', torch.__version__); print('CUDA:', torc
 # ─── 1. Clone / update repo ─────────────────────────────────────────────────
 echo "===== 1. Clone NonUQuant dev branch ====="
 if [ ! -d "$WORKDIR" ]; then
-    git clone -b dev https://github.com/anhnda/NonUQuant.git "$WORKDIR"
+    git clone -b dev https://github.com/huynguyenquang-collab/NonUQuant.git "$WORKDIR"
 else
     cd "$WORKDIR" && git fetch origin && git checkout dev && git pull origin dev
 fi
