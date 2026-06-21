@@ -1,20 +1,15 @@
 #!/usr/bin/env bash
 # run_colab_gptvq_1d_ncc_cov_debugmatch_llama31_8b_4bit_adjusted_ppl_only.sh
 #
-# Same as run_colab_gptvq_1d_ncc_cov_debugmatch_llama31_8b_4bit_ppl_only.sh
-# but NCC corrects against the **error-feedback-adjusted** baseline
-# (baseline=adjusted), i.e. the weights at the moment of nearest-centroid
-# assignment AFTER GPTVQ's Cholesky / error-feedback pass, NOT the original
-# FP16 weights.
+# PPL-only version of the old Llama-3.1-8B GPTVQ+NCC run, with exactly one
+# intended method change: NCC corrects against the **error-feedback-adjusted**
+# baseline (baseline=adjusted) instead of the original FP16 weights.
 #
 # "adjusted" baseline:  e_j = W_gptvq_j - W_adj_j   (residual w.r.t. the
 #   adjusted weight, so |e| <= g/2 by construction; NCC flips minimise the
 #   self-referential bias Σ(mu^T e_j)^2 on that residual).
 # "original" baseline:  e_j = W_gptvq_j - W_fp_j   (true inference error;
 #   end-to-end first-moment target matching the paper's stated objective).
-#
-# See debug_ncc_bias_mae_mse.py --baseline for a detailed discussion of the
-# difference and when each choice is appropriate.
 #
 # Only PPL (WikiText-2 + C4) is evaluated; lm-eval harness is disabled.
 set -euo pipefail
@@ -33,47 +28,35 @@ RUN_SETUP="${RUN_SETUP:-1}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 MODEL="${MODEL:-meta-llama/Meta-Llama-3.1-8B}"
 DEVICE="${DEVICE:-cuda:0}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-outputs/gptvq_1d_ncc_cov_debugmatch_adjusted_llama31_8b_4bit_ppl_only}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-outputs/gptvq_1d_ncc_llama31_8b_4bit_adjusted_ppl_only}"
 
 N_CALIB="${N_CALIB:-128}"
-MAX_LENGTH="${MAX_LENGTH:-512}"
+MAX_LENGTH="${MAX_LENGTH:-2048}"
 CALIB_DATASET="${CALIB_DATASET:-c4}"
 EVAL_SAMPLES="${EVAL_SAMPLES:-2000}"
 EVAL_MAX_LENGTH="${EVAL_MAX_LENGTH:-2048}"
 EVAL_STRIDE="${EVAL_STRIDE:-512}"
-GROUPSIZE="${GROUPSIZE:-128}"
+GROUPSIZE="${GROUPSIZE:-2048}"
 GPTQ_BLOCKSIZE="${GPTQ_BLOCKSIZE:-128}"
-KMEANS_ITERS="${KMEANS_ITERS:-20}"
+KMEANS_ITERS="${KMEANS_ITERS:-100}"
 ASSIGNMENT_CHUNK_SIZE="${ASSIGNMENT_CHUNK_SIZE:-4096}"
 NCC_BUDGET_P="${NCC_BUDGET_P:-0.02}"
-NCC_SWEEPS="${NCC_SWEEPS:-1}"
+NCC_SWEEPS="${NCC_SWEEPS:-3}"
 NCC_STOP_EPS="${NCC_STOP_EPS:-0.0}"
-NCC_SCORE="${NCC_SCORE:-cov}"
-NCC_COV_EPS="${NCC_COV_EPS:-1e-6}"
 DIAGNOSTIC_LAYER_LIMIT="${DIAGNOSTIC_LAYER_LIMIT:-6}"
 DIAGNOSTIC_MAX_TOKENS="${DIAGNOSTIC_MAX_TOKENS:-4096}"
-
-# Baseline for NCC: corrects the residual w.r.t. the error-feedback-adjusted
-# weights rather than the original FP16 weights.
-NCC_BASELINE="${NCC_BASELINE:-adjusted}"
-# Optional: path to cache GPTVQ-quantized weights + block codebooks.
-# On the first run this is a MISS (GPTVQ runs normally, cache is written).
-# On subsequent runs this is a HIT (fasterquant and Hessian are skipped;
-# only the lightweight activation-stat collection for NCC is re-run).
-# Leave empty to disable caching (default).
-GPTVQ_CACHE_DIR="${GPTVQ_CACHE_DIR:-}"
 
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
-echo "=== GPTVQ-1D+NCC-Cov debug-matched PPL only | Llama-3.1-8B | 4-bit | baseline=$NCC_BASELINE ==="
+echo "=== GPTVQ-1D+NCC adjusted-baseline PPL only | Llama-3.1-8B | 4-bit ==="
 echo "Model: $MODEL"
 echo "Output: $OUTPUT_ROOT"
 echo "Calibration: $CALIB_DATASET n=$N_CALIB len=$MAX_LENGTH"
 echo "GPTQ blocksize: $GPTQ_BLOCKSIZE | groupsize=$GROUPSIZE"
 echo "GPTVQ EM/k-means iterations: $KMEANS_ITERS"
-echo "NCC placement: post_module | score=$NCC_SCORE | budget_p=$NCC_BUDGET_P | sweeps=$NCC_SWEEPS"
-echo "NCC baseline: $NCC_BASELINE (corrects residual vs error-feedback-adjusted weights)"
+echo "NCC placement: post_module | score=lite | budget_p=$NCC_BUDGET_P | sweeps=$NCC_SWEEPS"
+echo "NCC baseline: adjusted (only method change vs old NCC Llama31 run)"
 echo "Eval only corrected variant: gptvq_ncc"
 echo "PPL only: WikiText-2/C4 eval_samples=$EVAL_SAMPLES len=$EVAL_MAX_LENGTH stride=$EVAL_STRIDE"
 echo "LM-eval: disabled"
@@ -137,10 +120,7 @@ PY
   --ncc-budget-p "$NCC_BUDGET_P" \
   --ncc-sweeps "$NCC_SWEEPS" \
   --ncc-stop-eps "$NCC_STOP_EPS" \
-  --ncc-score "$NCC_SCORE" \
-  --ncc-cov-eps "$NCC_COV_EPS" \
-  --baseline "$NCC_BASELINE" \
-  ${GPTVQ_CACHE_DIR:+--gptvq-cache-dir "$GPTVQ_CACHE_DIR"} \
+  --baseline adjusted \
   --diagnostic-layer-limit "$DIAGNOSTIC_LAYER_LIMIT" \
   --diagnostic-max-tokens "$DIAGNOSTIC_MAX_TOKENS" \
   --cleanup-model-artifacts
