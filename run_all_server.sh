@@ -46,7 +46,7 @@ pip install -q -r requirements-server.txt
 
 # ─── 3. HF login + kiểm tra / tải model ────────────────────────────────────
 echo "===== 3. HuggingFace login ====="
-huggingface-cli login --token "$HF_TOKEN"
+hf auth login --token "$HF_TOKEN"
 
 if [ ! -d "$MODEL_PATH" ]; then
     echo "Model not found locally – downloading meta-llama/Meta-Llama-3.1-8B ..."
