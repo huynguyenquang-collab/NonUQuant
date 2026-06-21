@@ -29,11 +29,8 @@ else
 fi
 cd "$WORKDIR"
 
-# GPTVQ submodule
-if [ ! -d "GPTVQ/.git" ]; then
-    rm -rf GPTVQ
-    git clone https://github.com/Qualcomm-AI-research/gptvq.git GPTVQ
-fi
+# NOTE: GPTVQ is tracked as regular files in this repo (with capture_w_assigned patch).
+# Do NOT re-clone from Qualcomm's upstream repo – it would overwrite the patch.
 
 # NCCQuant submodule
 if [ ! -d "NCCQuant/.git" ]; then
