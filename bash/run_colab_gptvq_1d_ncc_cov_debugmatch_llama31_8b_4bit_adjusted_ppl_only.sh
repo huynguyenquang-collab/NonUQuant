@@ -60,7 +60,7 @@ echo "GPTQ blocksize: $GPTQ_BLOCKSIZE | groupsize=$GROUPSIZE"
 echo "GPTVQ EM/k-means iterations: $KMEANS_ITERS"
 echo "NCC placement: post_module | score=$NCC_SCORE | budget_p=$NCC_BUDGET_P | sweeps=$NCC_SWEEPS"
 echo "NCC baseline: adjusted"
-echo "Variants: gptvq gptvq_ncc"
+echo "Compare mode: single GPTVQ pass -> save/eval gptvq and gptvq_ncc"
 echo "Quantization/eval layers: full model"
 echo "PPL only: WikiText-2/C4 eval_samples=$EVAL_SAMPLES len=$EVAL_MAX_LENGTH stride=$EVAL_STRIDE"
 echo "LM-eval: disabled"
@@ -104,6 +104,7 @@ COMMON_ARGS=(
   --device "$DEVICE"
   --output-root "$OUTPUT_ROOT"
   --variants gptvq gptvq_ncc
+  --single-pass-compare
   --correction ncc
   --ncc-placement post_module
   --keep-model-on-device
