@@ -606,7 +606,9 @@ def quantize_model_gptvq_1d(
     # pre-quantized weights + block codebooks from disk. Only the lightweight
     # activation-stat collection (for NCC mu/sigma) is re-run.
     _from_cache = False
-    _cache_orig_W: dict[str, torch.Tensor] = {}  # key → original FP32 weight (cpu)
+    _cache_orig_W: dict[str, torch.Tensor] = {}  # key -> original FP32 weight (cpu)
+    _cache_assigned_W: dict[str, torch.Tensor] = {}  # key -> adjusted assignment weight (cpu)
+    need_adjusted_baseline = correction is not None and args.baseline == "adjusted"
 
     if gptvq_cache_dir is not None:
         gptvq_cache_dir = Path(gptvq_cache_dir)
@@ -623,6 +625,15 @@ def quantize_model_gptvq_1d(
                         raise RuntimeError(f"[GPTVQ cache] Missing cache file: {_fpath}")
                     _snap = torch.load(_fpath, map_location="cpu", weights_only=True)
                     _cache_orig_W[_k] = _mod.weight.data.detach().cpu().clone()
+                    if need_adjusted_baseline:
+                        _assigned = _snap.get("W_assigned")
+                        if _assigned is None:
+                            raise RuntimeError(
+                                "[GPTVQ cache] baseline=adjusted requires cached W_assigned, "
+                                f"but {_fpath} does not contain it. Rebuild the cache with "
+                                "a correction run that uses --baseline adjusted."
+                            )
+                        _cache_assigned_W[_k] = _assigned.detach().cpu().clone()
                     _mod.weight.data = _snap["W_dequant"].to(_mod.weight.data.dtype)
                 del _full_li
         else:
@@ -731,6 +742,7 @@ def quantize_model_gptvq_1d(
                     del mu
                     quantized_layers += 1
                 else:
+                    capture_w_assigned = correction is not None and args.baseline == "adjusted"
                     gptq[name].fasterquant(
                         blocksize=args.gptq_blocksize,
                         percdamp=args.percdamp,
@@ -742,6 +754,7 @@ def quantize_model_gptvq_1d(
                         svd_rank=None,
                         hessian_weighted_lookups=args.hessian_weighted_lookups,
                         only_init_kmeans=False,
+                        capture_w_assigned=capture_w_assigned,
                     )
                     quantized_layers += 1
                     # ── save GPTVQ weights + codebooks to cache ──────────────
@@ -755,14 +768,15 @@ def quantize_model_gptvq_1d(
                             block_size=args.groupsize,
                         )
                         _fpath_save = gptvq_cache_dir / f"{key.replace('.', '_')}.pt"
-                        torch.save(
-                            {
-                                "W_dequant": _W_save.cpu(),
-                                "block_codebooks": _qres_save.block_codebooks.cpu(),
-                                "block_size": args.groupsize,
-                            },
-                            _fpath_save,
-                        )
+                        _cache_payload = {
+                            "W_dequant": _W_save.cpu(),
+                            "block_codebooks": _qres_save.block_codebooks.cpu(),
+                            "block_size": args.groupsize,
+                        }
+                        _W_assigned_save = getattr(gptq[name], "W_assigned", None)
+                        if _W_assigned_save is not None:
+                            _cache_payload["W_assigned"] = _W_assigned_save.detach().float().cpu()
+                        torch.save(_cache_payload, _fpath_save)
                         del _W_save, _qres_save
                 if gptvq_state is not None:
                     snapshot = module.weight.data.detach().cpu().clone()
@@ -818,9 +832,22 @@ def quantize_model_gptvq_1d(
                     mu = stat_sum[key].to(device) / count
                     ex2 = stat_sumsq[key].to(device) / count
                     sigma = (ex2 - mu * mu).clamp(min=0.0)
+                    if args.baseline == "adjusted":
+                        if _from_cache:
+                            W_base = _cache_assigned_W[key].to(device=device, dtype=torch.float32)
+                        else:
+                            W_assigned = getattr(gptq[name], "W_assigned", None)
+                            if W_assigned is None:
+                                raise RuntimeError(
+                                    "baseline=adjusted but gptq.W_assigned is None. "
+                                    "Use the patched GPTVQ/gptq.py with capture_w_assigned support."
+                                )
+                            W_base = W_assigned.detach().float().to(device)
+                    else:
+                        W_base = W_fp.to(device)
                     if correction == "rbvt":
                         W_corr, stats = apply_rbvt(
-                            W_fp=W_fp.to(device),
+                            W_fp=W_base,
                             qres=qres,
                             mu=mu,
                             sigma_ii=sigma if args.rbvt_lambda > 0.0 else None,
@@ -832,7 +859,7 @@ def quantize_model_gptvq_1d(
                         )
                     elif correction == "ncc":
                         W_corr, ncc_stats = _apply_ncc_sweeps(
-                            W_fp=W_fp.to(device),
+                            W_fp=W_base,
                             qres=qres,
                             mu=mu,
                             mu_var=(sigma / count) if args.ncc_use_james_stein else None,
@@ -874,7 +901,7 @@ def quantize_model_gptvq_1d(
                         totals["objective_after"] += ncc_stats["objective_after"]
                         for row in ncc_stats["sweep_history"]:
                             ncc_sweep_history.append({"layer": key, **row})
-                    del qres, W_corr, sigma, mu
+                    del qres, W_corr, sigma, mu, W_base
 
                 if not _from_cache and name in gptq:
                     gptq[name].free()
@@ -915,6 +942,7 @@ def quantize_model_gptvq_1d(
     }
     if correction is not None:
         stats.update(totals)
+        stats["baseline"] = args.baseline
         if correction == "rbvt":
             stats["rbvt_lambda"] = args.rbvt_lambda
             stats["rbvt_topk"] = args.rbvt_topk
@@ -929,7 +957,7 @@ def quantize_model_gptvq_1d(
             stats["ncc_sweep_history"] = ncc_sweep_history
         stats["activation_error_diagnostics"] = diagnostics
         print(
-            f"{correction.upper()} summary | "
+            f"{correction.upper()} summary | baseline={args.baseline} "
             f"flips={totals['flips']} candidates={totals['candidates']} "
             f"bias={totals['bias_before']:.6e}->{totals['bias_after']:.6e}"
         )
@@ -1182,6 +1210,7 @@ def run_single_pass_compare(args, hf_token: str | None) -> list[dict]:
             "objective_before",
             "objective_after",
             "variance_increase",
+            "baseline",
             "rbvt_lambda",
             "rbvt_topk",
         }
@@ -1320,7 +1349,10 @@ def build_parser():
         "--baseline",
         choices=["original", "adjusted"],
         default="original",
-        help="Baseline for NCC correction: 'original' = layer.weight before quant, 'adjusted' = error-feedback adjusted weights.",
+        help=(
+            "Baseline for post-module RBVT/NCC correction: 'original' = layer.weight "
+            "before quant, 'adjusted' = error-feedback adjusted weights."
+        ),
     )
     parser.add_argument(
         "--ncc-placement",
