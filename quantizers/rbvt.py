@@ -50,7 +50,7 @@ def apply_rbvt(
     sigma_ii: Optional[torch.Tensor] = None,
     rbvt_lambda: float = 1.0,
     rbvt_topk: Optional[int] = None,
-    rbvt_rank_alpha: float = 0.0,
+    mse_guard: bool = False,
     row_chunk: int = 1024,
     gap_floor: float = 1e-8,
     relax_eps: float = 1e-12,
@@ -59,8 +59,6 @@ def apply_rbvt(
 ) -> tuple[torch.Tensor, RBVTStats]:
     if rbvt_lambda < 0.0:
         raise ValueError(f"rbvt_lambda must be non-negative, got {rbvt_lambda}")
-    if rbvt_rank_alpha < 0.0:
-        raise ValueError(f"rbvt_rank_alpha must be non-negative, got {rbvt_rank_alpha}")
 
     device = W_fp.device
     out_features, in_features = W_fp.shape
@@ -130,13 +128,14 @@ def apply_rbvt(
         v = mu.unsqueeze(0) * e_sign * gap
         r = v.abs()
         q = sigma_ii.unsqueeze(0) * (gap.square() - 2.0 * gap * e.abs()).clamp(min=0.0)
-        q_rank = q + rbvt_rank_alpha * sigma_ii.unsqueeze(0) * gap.square()
 
         sign_aligned = (b.unsqueeze(1) * v) > 0
         admissible = feasible & gap_ok & sign_aligned & (r > relax_eps)
+        if mse_guard:
+            admissible &= gap < (2.0 * e.abs())
         if candidate_mask is not None:
             admissible &= candidate_mask[r0:r1]
-        rho = q_rank / (r + relax_eps)
+        rho = q / (r + relax_eps)
 
         for rr in range(rc):
             T = float(abs(b[rr].item()))

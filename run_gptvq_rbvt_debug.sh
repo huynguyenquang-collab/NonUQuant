@@ -30,7 +30,7 @@ MAX_LEN="${MAX_LEN:-2048}"
 CALIB_DS="${CALIB_DS:-c4}"
 RBVT_LAMBDA="${RBVT_LAMBDA:-1.0}"
 RBVT_TOPK="${RBVT_TOPK:-0}"
-RBVT_RANK_ALPHA="${RBVT_RANK_ALPHA:-0.0}"
+RBVT_MSE_GUARD="${RBVT_MSE_GUARD:-0}"
 GAP_FLOOR="${GAP_FLOOR:-1e-8}"
 STRICT_DESCENT="${STRICT_DESCENT:-1}"
 GPTQ_BLOCKSIZE="${GPTQ_BLOCKSIZE:-128}"
@@ -89,14 +89,20 @@ echo ""
 echo "================================================================"
 echo ">>> VARIANT: $TAG  ->  $OUTDIR"
 echo ">>> Debug layers: first $DEBUG_LAYER_LIMIT Linear modules, max_tokens=$DEBUG_MAX_TOKENS"
-echo ">>> RBVT: lambda=$RBVT_LAMBDA topk=$RBVT_TOPK rank_alpha=$RBVT_RANK_ALPHA"
+echo ">>> RBVT: lambda=$RBVT_LAMBDA topk=$RBVT_TOPK mse_guard=$RBVT_MSE_GUARD"
 echo "================================================================"
+
+rbvt_args=(
+  --gptvq-correction rbvt
+  --rbvt-lambda "$RBVT_LAMBDA"
+  --rbvt-topk "$RBVT_TOPK"
+  --gap-floor "$GAP_FLOOR"
+)
+[[ "$RBVT_MSE_GUARD" == "1" ]] && rbvt_args+=(--rbvt-mse-guard)
 
 set +e
 python main.py "${common_args[@]}" --output-dir "$OUTDIR" \
-  --gptvq-correction rbvt \
-  --rbvt-lambda "$RBVT_LAMBDA" --rbvt-topk "$RBVT_TOPK" \
-  --rbvt-rank-alpha "$RBVT_RANK_ALPHA" --gap-floor "$GAP_FLOOR" \
+  "${rbvt_args[@]}" \
   2>&1 | tee "$LOG"
 rc=${PIPESTATUS[0]}
 set -e
@@ -171,7 +177,7 @@ for layer, rows in by_layer.items():
     )
 
 print("\nAggregate RBVT:")
-for key in ("rbvt_lambda", "rbvt_topk", "rbvt_rank_alpha", "flips", "candidates", "bias_before", "bias_after", "objective_before", "objective_after", "variance_increase"):
+for key in ("rbvt_lambda", "rbvt_topk", "rbvt_mse_guard", "flips", "candidates", "bias_before", "bias_after", "objective_before", "objective_after", "variance_increase"):
     if key in q:
         print(f"  {key}: {q[key]}")
 
