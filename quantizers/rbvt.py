@@ -126,7 +126,12 @@ def apply_rbvt(
 
         v = mu.unsqueeze(0) * e_sign * gap
         r = v.abs()
-        q = sigma_ii.unsqueeze(0) * (gap.square() - 2.0 * gap * e.abs()).clamp(min=0.0)
+        # Signed diagonal activation-weighted MSE delta for the neighbour move.
+        # Negative q means the move improves the diagonal surrogate, positive q
+        # means it hurts. Keeping the sign lets rbvt_lambda trade bias reduction
+        # against both improvements and regressions instead of making all safe
+        # moves look identical.
+        q = sigma_ii.unsqueeze(0) * (gap.square() - 2.0 * gap * e.abs())
 
         sign_aligned = (b.unsqueeze(1) * v) > 0
         admissible = feasible & gap_ok & sign_aligned & (r > relax_eps)
