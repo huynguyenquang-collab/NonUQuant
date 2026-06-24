@@ -131,6 +131,7 @@ def apply_rbvt(
         diag_delta = sigma_ii.unsqueeze(0) * (2.0 * e * delta + delta.square())
         bias_delta = (b.unsqueeze(1) + mu.unsqueeze(0) * delta).square() - b.unsqueeze(1).square()
         signal = diag_delta + bias_delta
+        risk = signal.abs()
 
         sign_aligned = (b.unsqueeze(1) * v) > 0
         admissible = feasible & gap_ok & sign_aligned & (r > relax_eps)
@@ -156,10 +157,10 @@ def apply_rbvt(
                 objective_after += base_obj
                 continue
 
+            cand_risk = risk[rr, cand]
+            cand = cand[torch.argsort(cand_risk, descending=False, stable=True)]
             cand_rho = rho[rr, cand]
             cand = cand[torch.argsort(cand_rho, descending=False, stable=True)]
-            cand_signal = signal[rr, cand]
-            cand = cand[torch.argsort(cand_signal, descending=False, stable=True)]
 
             if rbvt_topk is not None and rbvt_topk > 0 and cand.numel() > rbvt_topk:
                 cand = cand[:rbvt_topk]
