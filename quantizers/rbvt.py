@@ -13,7 +13,6 @@ greedy correction by the soft relaxation in `RBVT_soft_relaxation_note.md`:
 from __future__ import annotations
 
 from dataclasses import dataclass
-import math
 from typing import Optional
 
 import torch
@@ -51,7 +50,6 @@ def apply_rbvt(
     sigma_ii: Optional[torch.Tensor] = None,
     rbvt_lambda: float = 1.0,
     rbvt_topk: Optional[int] = None,
-    rbvt_budget_p: float = 1.0,
     row_chunk: int = 1024,
     gap_floor: float = 1e-8,
     relax_eps: float = 1e-12,
@@ -60,8 +58,6 @@ def apply_rbvt(
 ) -> tuple[torch.Tensor, RBVTStats]:
     if rbvt_lambda < 0.0:
         raise ValueError(f"rbvt_lambda must be non-negative, got {rbvt_lambda}")
-    if not 0.0 <= rbvt_budget_p <= 1.0:
-        raise ValueError(f"rbvt_budget_p must be in [0, 1], got {rbvt_budget_p}")
 
     device = W_fp.device
     out_features, in_features = W_fp.shape
@@ -157,20 +153,30 @@ def apply_rbvt(
                 continue
 
             cand_rho = rho[rr, cand]
+            cand_r = r[rr, cand]
+            cand_gap = gap[rr, cand]
             if rbvt_topk is not None and rbvt_topk > 0 and cand.numel() > rbvt_topk:
                 _, topk_idx = torch.topk(cand_rho, k=rbvt_topk, largest=False, sorted=False)
                 cand = cand[topk_idx]
                 cand_rho = cand_rho[topk_idx]
+                cand_r = cand_r[topk_idx]
+                cand_gap = cand_gap[topk_idx]
 
-            cand_order = torch.argsort(cand_rho, descending=False)
+            # Sort by variance cost per bias progress, then break the common
+            # q=0 tie by taking larger bias progress first and smaller moves next.
+            # This keeps the relaxation soft while avoiding arbitrary column-order
+            # prefixes when many candidates have rho == 0.
+            tiny = torch.finfo(cand_rho.dtype).eps
+            cand_scale = cand_rho.abs().amax().clamp_min(1.0)
+            r_scale = cand_r.abs().amax().clamp_min(tiny)
+            gap_scale = cand_gap.abs().amax().clamp_min(tiny)
+            order_score = (
+                cand_rho / cand_scale
+                - 1e-6 * (cand_r / r_scale)
+                + 1e-9 * (cand_gap / gap_scale)
+            )
+            cand_order = torch.argsort(order_score, descending=False)
             cand = cand[cand_order]
-            if rbvt_budget_p == 0.0:
-                bias_after += base_obj
-                objective_after += base_obj
-                continue
-            if rbvt_budget_p < 1.0:
-                budget_cap = max(1, math.ceil(rbvt_budget_p * cand.numel()))
-                cand = cand[:budget_cap]
 
             r_cand = r[rr, cand]
             q_cand = q[rr, cand]
