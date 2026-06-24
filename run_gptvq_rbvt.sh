@@ -103,7 +103,7 @@ run_variant () {
   # main.py: quantize -> save_pretrained -> perplexity eval -> (lm-eval) ->
   # save run_summary.json -> cleanup_output_dir (deletes model, keeps summary).
   set +e
-  python main.py "${common_args[@]}" --output-dir "$outdir" "$@" \
+  python -u main.py "${common_args[@]}" --output-dir "$outdir" "$@" \
     2>&1 | tee "$OUT_ROOT/log_${SLUG}_${tag}.txt"
   local rc=${PIPESTATUS[0]}
   set -e
