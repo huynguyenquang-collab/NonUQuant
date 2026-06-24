@@ -88,7 +88,7 @@ echo ""
 echo "================================================================"
 echo ">>> VARIANT: $TAG  ->  $OUTDIR"
 echo ">>> Debug layers: first $DEBUG_LAYER_LIMIT Linear modules, max_tokens=$DEBUG_MAX_TOKENS"
-echo ">>> RBVT: lambda=$RBVT_LAMBDA topk=$RBVT_TOPK sort=(rho,risk=abs(signal))"
+echo ">>> RBVT: lambda=$RBVT_LAMBDA topk=$RBVT_TOPK sort=(rho,-abs(mu))"
 echo "================================================================"
 
 rbvt_args=(
