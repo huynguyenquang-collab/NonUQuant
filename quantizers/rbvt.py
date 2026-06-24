@@ -127,7 +127,7 @@ def apply_rbvt(
         v = mu.unsqueeze(0) * e_sign * gap
         r = v.abs()
         q = sigma_ii.unsqueeze(0) * (gap.square() - 2.0 * gap * e.abs()).clamp(min=0.0)
-        abs_mu = mu.abs()
+        bias_per_sq_gap = r / (gap.square() + relax_eps)
 
         sign_aligned = (b.unsqueeze(1) * v) > 0
         admissible = feasible & gap_ok & sign_aligned & (r > relax_eps)
@@ -153,8 +153,8 @@ def apply_rbvt(
                 objective_after += base_obj
                 continue
 
-            cand_abs_mu = abs_mu[cand]
-            cand = cand[torch.argsort(cand_abs_mu, descending=True, stable=True)]
+            cand_bias_per_sq_gap = bias_per_sq_gap[rr, cand]
+            cand = cand[torch.argsort(cand_bias_per_sq_gap, descending=True, stable=True)]
             cand_rho = rho[rr, cand]
             cand = cand[torch.argsort(cand_rho, descending=False, stable=True)]
 
