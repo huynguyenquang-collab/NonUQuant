@@ -745,6 +745,7 @@ def quantize_model_gptvq_1d(
                             sigma_ii=sigma if args.rbvt_lambda > 0.0 else None,
                             rbvt_lambda=args.rbvt_lambda,
                             rbvt_topk=args.rbvt_topk if args.rbvt_topk > 0 else None,
+                            target_ratio=getattr(args, "rbvt_target_ratio", 1.0),
                             mse_guard=getattr(args, "rbvt_mse_guard", False),
                             row_chunk=args.row_chunk,
                             gap_floor=args.gap_floor,
@@ -848,6 +849,7 @@ def quantize_model_gptvq_1d(
         if correction == "rbvt":
             stats["rbvt_lambda"] = args.rbvt_lambda
             stats["rbvt_topk"] = args.rbvt_topk
+            stats["rbvt_target_ratio"] = getattr(args, "rbvt_target_ratio", 1.0)
             stats["rbvt_mse_guard"] = getattr(args, "rbvt_mse_guard", False)
             stats["rbvt_layer_history"] = rbvt_layer_history
         if correction == "ncc":
@@ -1112,6 +1114,8 @@ def run_single_pass_compare(args, hf_token: str | None) -> list[dict]:
             "variance_increase",
             "rbvt_lambda",
             "rbvt_topk",
+            "rbvt_target_ratio",
+            "rbvt_mse_guard",
         }
     }
     gptvq_stats["method"] = "gptvq"
@@ -1243,6 +1247,7 @@ def build_parser():
     parser.add_argument("--row-chunk", type=int, default=1024)
     parser.add_argument("--rbvt-lambda", type=float, default=1.0)
     parser.add_argument("--rbvt-topk", type=int, default=0)
+    parser.add_argument("--rbvt-target-ratio", type=float, default=1.0)
     parser.add_argument("--rbvt-mse-guard", action="store_true", default=False)
     parser.add_argument("--ncc-budget-p", type=float, default=0.02)
     parser.add_argument(
@@ -1307,6 +1312,8 @@ def main():
         raise ValueError("--groupsize must be positive for GPTVQ-1D/RBVT index conversion.")
     if args.rbvt_lambda < 0:
         raise ValueError("--rbvt-lambda must be non-negative.")
+    if not 0.0 <= args.rbvt_target_ratio <= 1.0:
+        raise ValueError("--rbvt-target-ratio must be in [0, 1].")
     if not 0.0 < args.ncc_budget_p <= 1.0:
         raise ValueError("--ncc-budget-p must be in (0, 1].")
     if args.ncc_sweeps <= 0:

@@ -32,6 +32,7 @@ MAX_LEN="${MAX_LEN:-2048}"
 CALIB_DS="${CALIB_DS:-c4}"                    # c4|wikitext2
 RBVT_LAMBDA="${RBVT_LAMBDA:-1.0}"
 RBVT_TOPK="${RBVT_TOPK:-0}"
+RBVT_TARGET_RATIO="${RBVT_TARGET_RATIO:-1.0}"
 RBVT_MSE_GUARD="${RBVT_MSE_GUARD:-0}"
 GAP_FLOOR="${GAP_FLOOR:-1e-8}"
 STRICT_DESCENT="${STRICT_DESCENT:-1}"         # 1 -> --strict-descent, 0 -> --allow-overshoot
@@ -136,7 +137,7 @@ try:
             cols.append(f"{ds}={m['perplexity']:.4f}")
     qs = s.get("quantization", {})
     extra = []
-    for k in ("method", "bits", "vq_dim", "flips", "bias_before", "bias_after", "rbvt_lambda", "rbvt_topk", "rbvt_mse_guard"):
+    for k in ("method", "bits", "vq_dim", "flips", "bias_before", "bias_after", "rbvt_lambda", "rbvt_topk", "rbvt_target_ratio", "rbvt_mse_guard"):
         if k in qs:
             extra.append(f"{k}={qs[k]}")
     print(tag + "\t" + "\t".join(cols) + "\t" + " ".join(extra))
@@ -162,6 +163,7 @@ if [[ "$RUN_RBVT_POST_MODULE" == "1" ]]; then
     --gptvq-correction rbvt
     --rbvt-lambda "$RBVT_LAMBDA"
     --rbvt-topk "$RBVT_TOPK"
+    --rbvt-target-ratio "$RBVT_TARGET_RATIO"
     --gap-floor "$GAP_FLOOR"
   )
   [[ "$RBVT_MSE_GUARD" == "1" ]] && rbvt_args+=(--rbvt-mse-guard)
