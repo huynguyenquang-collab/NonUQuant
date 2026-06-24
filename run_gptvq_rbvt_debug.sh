@@ -91,7 +91,7 @@ echo ""
 echo "================================================================"
 echo ">>> VARIANT: $TAG  ->  $OUTDIR"
 echo ">>> Debug layers: first $DEBUG_LAYER_LIMIT Linear modules, max_tokens=$DEBUG_MAX_TOKENS"
-echo ">>> RBVT: lambda=$RBVT_LAMBDA topk=$RBVT_TOPK budget_p=$RBVT_BUDGET_P target_ratio=$RBVT_TARGET_RATIO mse_guard=$RBVT_MSE_GUARD sort=(rho,-r/(gap^2+eps))"
+echo ">>> RBVT: lambda=$RBVT_LAMBDA topk=$RBVT_TOPK budget_p=$RBVT_BUDGET_P target_ratio=$RBVT_TARGET_RATIO mse_guard=$RBVT_MSE_GUARD sort=rho"
 echo "================================================================"
 
 rbvt_args=(
