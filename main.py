@@ -571,7 +571,9 @@ def build_parser():
                         "each flip then reduces both bias and diagonal awMSE. "
                         "Trades bias-reduction for guaranteed no-awMSE-increase.")
 
-    # --- GPTVQ-1D (method=gptvq): upstream GPTVQ scalar VQ + NCC correction ---
+    # --- GPTVQ-1D (method=gptvq): upstream GPTVQ scalar VQ + post correction ---
+    p.add_argument("--gptvq-correction", choices=["none", "ncc", "rbvt"], default="ncc",
+                   help="(method=gptvq) post-GPTVQ correction to apply.")
     p.add_argument("--wbits", type=int, default=4, choices=[3, 4],
                    help="(method=gptvq) GPTVQ-1D bit-width.")
     p.add_argument("--groupsize", type=int, default=128,
@@ -690,9 +692,10 @@ def main():
         seed=args.seed,
     )
     if args.method == "gptvq":
-        # GPTVQ-1D (upstream Qualcomm GPTVQ scalar VQ codebook) + NCC first-moment
-        # correction. Reuses the verified pipeline from gptvq_rbvt_benchmark so the
-        # codebook / QuantResult / NCC interfaces never drift from the debug harness.
+        # GPTVQ-1D (upstream Qualcomm GPTVQ scalar VQ codebook) plus an optional
+        # post assignment correction. Reuses the verified pipeline from
+        # gptvq_rbvt_benchmark so codebook / QuantResult / correction interfaces
+        # never drift from the debug harness.
         # Imported lazily: importing the benchmark module sets up sys.path for the
         # ./GPTVQ checkout and the transformers.Conv1D shim, so it must only run when
         # this method is actually selected.
@@ -709,7 +712,7 @@ def main():
             tokenizer=tokenizer,
             calib_texts=calib_texts,
             args=args,
-            correction="ncc",
+            correction=None if args.gptvq_correction == "none" else args.gptvq_correction,
         )
         quant_stats = gptvq_stats
     elif args.method == "gptq":
