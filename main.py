@@ -527,6 +527,8 @@ def build_parser():
     p.add_argument("--method", type=str, default="rbvt", choices=["float", "rtn", "rbvt", "gptq", "gptvq"], help="Run mode")
     p.add_argument("--quantizer", type=str, default="nf4", choices=["nf3", "nf4", "nvfp4", "codebook3", "codebook4"])
     p.add_argument("--output-dir", type=str, default="./quantized_model")
+    p.add_argument("--skip-save-eval", dest="skip_save_eval", action="store_true", default=False,
+                   help="Quantize and write run_summary.json only; skip save_pretrained/evaluation.")
 
     p.add_argument("--skip-lmhead", dest="skip_lmhead", action="store_true", default=True)
     p.add_argument("--no-skip-lmhead", dest="skip_lmhead", action="store_false")
@@ -605,6 +607,8 @@ def build_parser():
                    help="(method=gptvq) number of early Linear layers for activation-error diagnostics.")
     p.add_argument("--gptvq-diagnostic-max-tokens", dest="diagnostic_max_tokens", type=int, default=4096,
                    help="(method=gptvq) max calibration tokens retained per diagnostic layer.")
+    p.add_argument("--gptvq-stop-after-linear-layers", dest="stop_after_linear_layers", type=int, default=0,
+                   help="(method=gptvq) stop quantization after this many Linear modules; 0 runs all.")
 
     p.add_argument("--eval-stride", type=int, default=512)
     p.add_argument("--eval-max-length", type=int, default=2048)
@@ -757,6 +761,30 @@ def main():
         )
 
     os.makedirs(args.output_dir, exist_ok=True)
+    if args.skip_save_eval:
+        run_summary = {
+            "model_path": args.model_path,
+            "output_dir": args.output_dir,
+            "run_name": run_name,
+            "device": args.device,
+            "quantizer": args.quantizer,
+            "quantization": quant_stats,
+            "calibration": {
+                "dataset": args.calib_dataset,
+                "n_calib": args.n_calib,
+                "max_length": args.max_length,
+                "seed": args.seed,
+            },
+            "evaluation": {
+                "skipped": True,
+                "reason": "--skip-save-eval",
+            },
+            "args": vars(args),
+        }
+        save_run_summary(args.output_dir, run_summary)
+        print("Skipping save_pretrained and evaluation (--skip-save-eval).")
+        return
+
     print(f"Saving to {args.output_dir} ...")
     model.save_pretrained(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)

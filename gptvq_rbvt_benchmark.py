@@ -611,9 +611,13 @@ def quantize_model_gptvq_1d(
     diagnostic_inputs: dict[str, list[torch.Tensor]] = {}
     diagnostic_order: list[str] = []
     quantized_layers = 0
+    stop_after_linear_layers = getattr(args, "stop_after_linear_layers", 0)
     tick = time.time()
 
     for layer_idx in range(len(layers)):
+        if stop_after_linear_layers > 0 and quantized_layers >= stop_after_linear_layers:
+            print(f"Stopping GPTVQ debug after {quantized_layers} Linear layers.")
+            break
         print(f"\n=== GPTVQ layer {layer_idx + 1}/{len(layers)} ===")
         layer = layers[layer_idx].to(device)
         full = find_layers(layer)
@@ -661,6 +665,8 @@ def quantize_model_gptvq_1d(
                     handle.remove()
 
             for name, module in subset.items():
+                if stop_after_linear_layers > 0 and quantized_layers >= stop_after_linear_layers:
+                    break
                 key = _linear_key(layer_idx, name)
                 W_fp = module.weight.data.detach().clone().float()
                 print(f"Quantizing {key} with upstream GPTVQ-1D ...")
@@ -806,6 +812,9 @@ def quantize_model_gptvq_1d(
                 gptq[name].free()
                 del W_fp
                 torch.cuda.empty_cache()
+
+            if stop_after_linear_layers > 0 and quantized_layers >= stop_after_linear_layers:
+                break
 
         for sample_idx in range(actual_n_calib):
             outs[sample_idx] = _layer_call(layer, inps[sample_idx].unsqueeze(0), cache)

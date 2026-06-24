@@ -36,9 +36,9 @@ GPTQ_BLOCKSIZE="${GPTQ_BLOCKSIZE:-128}"
 GPTQ_PERCDAMP="${GPTQ_PERCDAMP:-0.01}"
 
 # ---- debug / eval -----------------------------------------------------------
-DEBUG_LAYER_LIMIT="${DEBUG_LAYER_LIMIT:-8}"
+DEBUG_LAYER_LIMIT="${DEBUG_LAYER_LIMIT:-6}"
 DEBUG_MAX_TOKENS="${DEBUG_MAX_TOKENS:-4096}"
-LM_EVAL="${LM_EVAL:-1}"
+LM_EVAL="${LM_EVAL:-0}"
 EVAL_SAMPLES="${EVAL_SAMPLES:-2000}"
 
 cd "$REPO_DIR"
@@ -70,6 +70,8 @@ common_args=(
   --eval-samples "$EVAL_SAMPLES"
   --gptvq-diagnostic-layer-limit "$DEBUG_LAYER_LIMIT"
   --gptvq-diagnostic-max-tokens "$DEBUG_MAX_TOKENS"
+  --gptvq-stop-after-linear-layers "$DEBUG_LAYER_LIMIT"
+  --skip-save-eval
 )
 [[ "$INCLUDE_M_STEP"   == "0" ]] && common_args+=(--no-include-m-step)
 [[ "$HESSIAN_LOOKUPS"  == "0" ]] && common_args+=(--no-hessian-weighted-lookups)
