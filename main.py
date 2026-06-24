@@ -284,6 +284,7 @@ def quantize_model(
     row_chunk: int = 1024,
     rbvt_lambda: float = 1.0,
     rbvt_topk: int = 0,
+    rbvt_budget_p: float = 1.0,
     gap_floor: float = 1e-8,
     strict_descent: bool = True,
 ):
@@ -335,6 +336,7 @@ def quantize_model(
                 sigma_ii=sigma_ii,
                 rbvt_lambda=rbvt_lambda,
                 rbvt_topk=rbvt_topk if rbvt_topk > 0 else None,
+                rbvt_budget_p=rbvt_budget_p,
                 row_chunk=row_chunk,
                 gap_floor=gap_floor,
                 strict_descent=strict_descent,
@@ -386,6 +388,7 @@ def quantize_model(
                 "objective_after": total_objective_after,
                 "variance_increase": total_variance_increase,
                 "rbvt_topk": rbvt_topk,
+                "rbvt_budget_p": rbvt_budget_p,
             }
         )
 
@@ -541,6 +544,7 @@ def build_parser():
     p.add_argument("--no-asym", dest="asym", action="store_false")
     p.add_argument("--rbvt-lambda", type=float, default=1.0, help="Lambda in the RBVT surrogate objective")
     p.add_argument("--rbvt-topk", type=int, default=0, help="Optional per-row candidate prefilter for RBVT; 0 keeps the full candidate set")
+    p.add_argument("--rbvt-budget-p", type=float, default=1.0, help="Optional per-row RBVT candidate budget fraction in [0,1]; 1 keeps all")
     p.add_argument("--gap-floor", type=float, default=1e-8, help="Absolute floor on a feasible neighbouring gap")
     p.add_argument("--strict-descent", dest="strict_descent", action="store_true", default=True, help="Enforce sum r_i <= T in projection")
     p.add_argument("--allow-overshoot", dest="strict_descent", action="store_false", help="Use the looser sum r_i <= 2T projection bound")
@@ -636,6 +640,8 @@ def main():
         args.lm_eval_tasks = list(DEFAULT_LM_EVAL_TASKS[args.lm_eval_task_preset])
     if args.rbvt_lambda < 0.0:
         raise ValueError("--rbvt-lambda must be non-negative")
+    if not 0.0 <= args.rbvt_budget_p <= 1.0:
+        raise ValueError("--rbvt-budget-p must be in [0, 1]")
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -756,6 +762,7 @@ def main():
             row_chunk=args.row_chunk,
             rbvt_lambda=args.rbvt_lambda,
             rbvt_topk=args.rbvt_topk,
+            rbvt_budget_p=args.rbvt_budget_p,
             gap_floor=args.gap_floor,
             strict_descent=args.strict_descent,
         )

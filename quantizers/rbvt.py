@@ -13,6 +13,7 @@ greedy correction by the soft relaxation in `RBVT_soft_relaxation_note.md`:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Optional
 
 import torch
@@ -50,6 +51,7 @@ def apply_rbvt(
     sigma_ii: Optional[torch.Tensor] = None,
     rbvt_lambda: float = 1.0,
     rbvt_topk: Optional[int] = None,
+    rbvt_budget_p: float = 1.0,
     row_chunk: int = 1024,
     gap_floor: float = 1e-8,
     relax_eps: float = 1e-12,
@@ -58,6 +60,8 @@ def apply_rbvt(
 ) -> tuple[torch.Tensor, RBVTStats]:
     if rbvt_lambda < 0.0:
         raise ValueError(f"rbvt_lambda must be non-negative, got {rbvt_lambda}")
+    if not 0.0 <= rbvt_budget_p <= 1.0:
+        raise ValueError(f"rbvt_budget_p must be in [0, 1], got {rbvt_budget_p}")
 
     device = W_fp.device
     out_features, in_features = W_fp.shape
@@ -126,12 +130,7 @@ def apply_rbvt(
 
         v = mu.unsqueeze(0) * e_sign * gap
         r = v.abs()
-        # Signed diagonal activation-weighted MSE delta for the neighbour move.
-        # Negative q means the move improves the diagonal surrogate, positive q
-        # means it hurts. Keeping the sign lets rbvt_lambda trade bias reduction
-        # against both improvements and regressions instead of making all safe
-        # moves look identical.
-        q = sigma_ii.unsqueeze(0) * (gap.square() - 2.0 * gap * e.abs())
+        q = sigma_ii.unsqueeze(0) * (gap.square() - 2.0 * gap * e.abs()).clamp(min=0.0)
 
         sign_aligned = (b.unsqueeze(1) * v) > 0
         admissible = feasible & gap_ok & sign_aligned & (r > relax_eps)
@@ -165,6 +164,13 @@ def apply_rbvt(
 
             cand_order = torch.argsort(cand_rho, descending=False)
             cand = cand[cand_order]
+            if rbvt_budget_p == 0.0:
+                bias_after += base_obj
+                objective_after += base_obj
+                continue
+            if rbvt_budget_p < 1.0:
+                budget_cap = max(1, math.ceil(rbvt_budget_p * cand.numel()))
+                cand = cand[:budget_cap]
 
             r_cand = r[rr, cand]
             q_cand = q[rr, cand]

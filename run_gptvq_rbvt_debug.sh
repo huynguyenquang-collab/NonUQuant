@@ -30,6 +30,7 @@ MAX_LEN="${MAX_LEN:-2048}"
 CALIB_DS="${CALIB_DS:-c4}"
 RBVT_LAMBDA="${RBVT_LAMBDA:-1.0}"
 RBVT_TOPK="${RBVT_TOPK:-0}"
+RBVT_BUDGET_P="${RBVT_BUDGET_P:-1.0}"
 GAP_FLOOR="${GAP_FLOOR:-1e-8}"
 STRICT_DESCENT="${STRICT_DESCENT:-1}"
 GPTQ_BLOCKSIZE="${GPTQ_BLOCKSIZE:-128}"
@@ -93,7 +94,8 @@ echo "================================================================"
 set +e
 python main.py "${common_args[@]}" --output-dir "$OUTDIR" \
   --gptvq-correction rbvt \
-  --rbvt-lambda "$RBVT_LAMBDA" --rbvt-topk "$RBVT_TOPK" --gap-floor "$GAP_FLOOR" \
+  --rbvt-lambda "$RBVT_LAMBDA" --rbvt-topk "$RBVT_TOPK" \
+  --rbvt-budget-p "$RBVT_BUDGET_P" --gap-floor "$GAP_FLOOR" \
   2>&1 | tee "$LOG"
 rc=${PIPESTATUS[0]}
 set -e
