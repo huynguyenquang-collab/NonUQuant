@@ -30,6 +30,9 @@ MAX_LEN="${MAX_LEN:-2048}"
 CALIB_DS="${CALIB_DS:-c4}"
 RBVT_LAMBDA="${RBVT_LAMBDA:-1.0}"
 RBVT_TOPK="${RBVT_TOPK:-0}"
+RBVT_BUDGET_P="${RBVT_BUDGET_P:-${BUDGET_P:-0.005}}"
+RBVT_TARGET_RATIO="${RBVT_TARGET_RATIO:-0.2}"
+RBVT_MSE_GUARD="${RBVT_MSE_GUARD:-1}"
 GAP_FLOOR="${GAP_FLOOR:-1e-8}"
 STRICT_DESCENT="${STRICT_DESCENT:-1}"
 GPTQ_BLOCKSIZE="${GPTQ_BLOCKSIZE:-128}"
@@ -88,15 +91,18 @@ echo ""
 echo "================================================================"
 echo ">>> VARIANT: $TAG  ->  $OUTDIR"
 echo ">>> Debug layers: first $DEBUG_LAYER_LIMIT Linear modules, max_tokens=$DEBUG_MAX_TOKENS"
-echo ">>> RBVT: lambda=$RBVT_LAMBDA topk=$RBVT_TOPK sort=(rho,-r/(gap^2+eps))"
+echo ">>> RBVT: lambda=$RBVT_LAMBDA topk=$RBVT_TOPK budget_p=$RBVT_BUDGET_P target_ratio=$RBVT_TARGET_RATIO mse_guard=$RBVT_MSE_GUARD sort=(rho,-r/(gap^2+eps))"
 echo "================================================================"
 
 rbvt_args=(
   --gptvq-correction rbvt
   --rbvt-lambda "$RBVT_LAMBDA"
   --rbvt-topk "$RBVT_TOPK"
+  --rbvt-budget-p "$RBVT_BUDGET_P"
+  --rbvt-target-ratio "$RBVT_TARGET_RATIO"
   --gap-floor "$GAP_FLOOR"
 )
+[[ "$RBVT_MSE_GUARD" == "1" ]] && rbvt_args+=(--rbvt-mse-guard)
 
 set +e
 python main.py "${common_args[@]}" --output-dir "$OUTDIR" \
@@ -175,7 +181,7 @@ for layer, rows in by_layer.items():
     )
 
 print("\nAggregate RBVT:")
-for key in ("rbvt_lambda", "rbvt_topk", "flips", "candidates", "bias_before", "bias_after", "objective_before", "objective_after", "variance_increase"):
+for key in ("rbvt_lambda", "rbvt_topk", "rbvt_budget_p", "rbvt_target_ratio", "rbvt_mse_guard", "flips", "candidates", "bias_before", "bias_after", "objective_before", "objective_after", "variance_increase"):
     if key in q:
         print(f"  {key}: {q[key]}")
 
