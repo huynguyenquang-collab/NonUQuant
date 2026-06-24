@@ -153,30 +153,30 @@ def apply_rbvt(
                 continue
 
             cand_rho = rho[rr, cand]
-            cand_r = r[rr, cand]
             cand_gap = gap[rr, cand]
-            if rbvt_topk is not None and rbvt_topk > 0 and cand.numel() > rbvt_topk:
-                _, topk_idx = torch.topk(cand_rho, k=rbvt_topk, largest=False, sorted=False)
-                cand = cand[topk_idx]
-                cand_rho = cand_rho[topk_idx]
-                cand_r = cand_r[topk_idx]
-                cand_gap = cand_gap[topk_idx]
 
-            # Sort by variance cost per bias progress, then break the common
-            # q=0 tie by taking larger bias progress first and smaller moves next.
-            # This keeps the relaxation soft while avoiding arbitrary column-order
-            # prefixes when many candidates have rho == 0.
+            # Primary RBVT ordering is rho = q / r. In practice many safe moves
+            # have q=0, so rho ties at zero. Break only that q=0 tie with an
+            # NCC-Cov-like cost: lower (sigma+eps)*gap/|mu| is better. Positive-q
+            # candidates keep the RBVT rho ordering.
             tiny = torch.finfo(cand_rho.dtype).eps
-            cand_scale = cand_rho.abs().amax().clamp_min(1.0)
-            r_scale = cand_r.abs().amax().clamp_min(tiny)
-            gap_scale = cand_gap.abs().amax().clamp_min(tiny)
-            order_score = (
-                cand_rho / cand_scale
-                - 1e-6 * (cand_r / r_scale)
-                + 1e-9 * (cand_gap / gap_scale)
-            )
-            cand_order = torch.argsort(order_score, descending=False)
-            cand = cand[cand_order]
+            zero_rho = cand_rho <= tiny
+            zero_cand = cand[zero_rho]
+            pos_cand = cand[~zero_rho]
+            ordered_parts = []
+            if zero_cand.numel() > 0:
+                z_gap = gap[rr, zero_cand]
+                z_mu = mu[zero_cand].abs()
+                z_sigma = sigma_ii[zero_cand]
+                z_cost = (z_sigma + 1e-6) * z_gap / z_mu.clamp_min(1e-12)
+                ordered_parts.append(zero_cand[torch.argsort(z_cost, descending=False)])
+            if pos_cand.numel() > 0:
+                pos_rho = rho[rr, pos_cand]
+                ordered_parts.append(pos_cand[torch.argsort(pos_rho, descending=False)])
+            cand = torch.cat(ordered_parts) if len(ordered_parts) > 1 else ordered_parts[0]
+
+            if rbvt_topk is not None and rbvt_topk > 0 and cand.numel() > rbvt_topk:
+                cand = cand[:rbvt_topk]
 
             r_cand = r[rr, cand]
             q_cand = q[rr, cand]
