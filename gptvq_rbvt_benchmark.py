@@ -606,6 +606,7 @@ def quantize_model_gptvq_1d(
         "variance_increase": 0.0,
     }
     ncc_sweep_history: list[dict] = []
+    rbvt_layer_history: list[dict] = []
     diagnostics: list[dict] = []
     diagnostic_inputs: dict[str, list[torch.Tensor]] = {}
     diagnostic_order: list[str] = []
@@ -777,6 +778,21 @@ def quantize_model_gptvq_1d(
                     if correction == "rbvt":
                         for total_key in totals:
                             totals[total_key] += getattr(stats, total_key)
+                        rbvt_layer_history.append(
+                            {
+                                "layer": key,
+                                "flips": int(stats.flips),
+                                "candidates": int(stats.candidates),
+                                "boundary_kept": int(stats.boundary_kept),
+                                "bias_before": float(stats.bias_before),
+                                "bias_after": float(stats.bias_after),
+                                "bias_delta": float(stats.bias_after - stats.bias_before),
+                                "objective_before": float(stats.objective_before),
+                                "objective_after": float(stats.objective_after),
+                                "objective_delta": float(stats.objective_after - stats.objective_before),
+                                "variance_increase": float(stats.variance_increase),
+                            }
+                        )
                     else:
                         totals["flips"] += ncc_stats["flips"]
                         totals["bias_before"] += ncc_stats["bias_before"]
@@ -822,6 +838,7 @@ def quantize_model_gptvq_1d(
         if correction == "rbvt":
             stats["rbvt_lambda"] = args.rbvt_lambda
             stats["rbvt_topk"] = args.rbvt_topk
+            stats["rbvt_layer_history"] = rbvt_layer_history
         if correction == "ncc":
             stats["ncc_budget_p"] = args.ncc_budget_p
             stats["ncc_placement"] = args.ncc_placement
