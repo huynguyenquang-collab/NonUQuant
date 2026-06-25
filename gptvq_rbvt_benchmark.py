@@ -1105,7 +1105,7 @@ def run_variant(variant: str, args, hf_token: str | None):
         tokenizer.pad_token = tokenizer.eos_token
 
     load_kwargs = {
-        "torch_dtype": torch.float16 if args.device.startswith("cuda") else torch.float32,
+        "torch_dtype": torch.bfloat16 if args.device.startswith("cuda") else torch.float32,
         "trust_remote_code": True,
         "token": hf_token,
         "low_cpu_mem_usage": True,
@@ -1203,7 +1203,7 @@ def run_single_pass_compare(args, hf_token: str | None) -> list[dict]:
         tokenizer.pad_token = tokenizer.eos_token
 
     load_kwargs = {
-        "torch_dtype": torch.float16 if args.device.startswith("cuda") else torch.float32,
+        "torch_dtype": torch.bfloat16 if args.device.startswith("cuda") else torch.float32,
         "trust_remote_code": True,
         "token": hf_token,
         "low_cpu_mem_usage": True,
