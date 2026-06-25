@@ -48,8 +48,13 @@ EVAL_MAX_LENGTH="${EVAL_MAX_LENGTH:-2048}"
 EVAL_CACHE_DIR="${EVAL_CACHE_DIR:-./dataset_cache}"
 LM_EVAL_TASKS="${LM_EVAL_TASKS:-arc_easy arc_challenge hellaswag piqa winogrande boolq rte openbookqa lambada_openai}"
 LM_EVAL_BATCH_SIZE="${LM_EVAL_BATCH_SIZE:-auto}"
+LM_EVAL_NUM_FEWSHOT="${LM_EVAL_NUM_FEWSHOT:-}"
 LM_EVAL_OUTPUT_DIR="${LM_EVAL_OUTPUT_DIR:-./outputs/lm_eval}"
 LM_EVAL_LIMIT="${LM_EVAL_LIMIT:-}"
+RUN_CONTEXT="${RUN_CONTEXT:-Model:$(basename "$MODEL") bit:$WBITS}"
+USE_WANDB="${USE_WANDB:-0}"
+WANDB_PROJECT="${WANDB_PROJECT:-rbvtquant}"
+WANDB_ENTITY="${WANDB_ENTITY:-}"
 
 # ---- which variants to run --------------------------------------------------
 RUN_BASE="${RUN_BASE:-1}"                     # GPTVQ-1D, no correction
@@ -104,6 +109,7 @@ common_args=(
 [[ "$KEEP_ON_DEVICE"   == "1" ]] && common_args+=(--keep-model-on-device)
 [[ "$LM_EVAL"          == "0" ]] && common_args+=(--no-lm-eval)
 [[ -n "$LM_EVAL_LIMIT" ]] && common_args+=(--lm-eval-limit "$LM_EVAL_LIMIT")
+[[ -n "$LM_EVAL_NUM_FEWSHOT" ]] && common_args+=(--lm-eval-num-fewshot "$LM_EVAL_NUM_FEWSHOT")
 read -r -a lm_eval_tasks_array <<< "$LM_EVAL_TASKS"
 common_args+=(--lm-eval-tasks "${lm_eval_tasks_array[@]}")
 if [[ "$STRICT_DESCENT" == "1" ]]; then
@@ -291,6 +297,7 @@ if [[ "$USE_SINGLE_PASS_COMPARE" == "1" && "$RUN_BASE" == "1" && "$RUN_RBVT_POST
     --eval-cache-dir "$EVAL_CACHE_DIR"
     --lm-eval-batch-size "$LM_EVAL_BATCH_SIZE"
     --lm-eval-output-dir "$LM_EVAL_OUTPUT_DIR"
+    --run-context "$RUN_CONTEXT"
     --lm-eval-tasks
   )
   single_args+=("${lm_eval_tasks_array[@]}")
@@ -300,6 +307,13 @@ if [[ "$USE_SINGLE_PASS_COMPARE" == "1" && "$RUN_BASE" == "1" && "$RUN_RBVT_POST
   [[ "$KEEP_ON_DEVICE"   == "1" ]] && single_args+=(--keep-model-on-device)
   [[ "$LM_EVAL"          == "0" ]] && single_args+=(--no-lm-eval)
   [[ -n "$LM_EVAL_LIMIT" ]] && single_args+=(--lm-eval-limit "$LM_EVAL_LIMIT")
+  [[ -n "$LM_EVAL_NUM_FEWSHOT" ]] && single_args+=(--lm-eval-num-fewshot "$LM_EVAL_NUM_FEWSHOT")
+  if [[ "$USE_WANDB" == "1" ]]; then
+    single_args+=(--use-wandb --wandb-project "$WANDB_PROJECT")
+    [[ -n "$WANDB_ENTITY" ]] && single_args+=(--wandb-entity "$WANDB_ENTITY")
+  else
+    single_args+=(--no-wandb)
+  fi
   if [[ "$STRICT_DESCENT" == "1" ]]; then
     single_args+=(--strict-descent)
   else
@@ -431,7 +445,19 @@ for tag, path in summary_paths:
         continue
     values = []
     for task in tasks:
-        metric_name, metric_value = pick_metric(task_summary.get(task, {}))
+        metrics = task_summary.get(task, {})
+        if task == "gsm8k" and isinstance(metrics, dict):
+            strict = metrics.get("exact_match,strict-match")
+            flex = metrics.get("exact_match,flexible-extract")
+            if isinstance(strict, (int, float)) and not isinstance(strict, bool):
+                print(f"  {task:<18} {'exact_match,strict-match':<28} {strict:.4f}")
+                values.append(float(strict))
+            if isinstance(flex, (int, float)) and not isinstance(flex, bool):
+                print(f"  {task:<18} {'exact_match,flexible-extract':<28} {flex:.4f}")
+            if not isinstance(strict, (int, float)) and not isinstance(flex, (int, float)):
+                print(f"  {task:<18} MISSING")
+            continue
+        metric_name, metric_value = pick_metric(metrics)
         if metric_value is None:
             print(f"  {task:<18} MISSING")
         else:

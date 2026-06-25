@@ -52,10 +52,142 @@ from eval_perplexity import RBVTSlidingWindowEvaluator  # noqa: E402
 from lm_eval_runner import LMEvalHarnessRunner  # noqa: E402
 from quantizers import apply_rbvt  # noqa: E402
 from quantizers.base_quantizer import QuantResult  # noqa: E402
-from runtime_utils import build_model_slug, load_runtime_env, resolve_hf_token  # noqa: E402
+from runtime_utils import (  # noqa: E402
+    collect_lm_eval_wandb_metrics,
+    build_model_slug,
+    load_runtime_env,
+    resolve_hf_token,
+    resolve_wandb_api_key,
+)
 
 
 _NCC_APPLY = None
+
+
+def _run_context(args) -> str:
+    return getattr(args, "run_context", "") or f"Model:{build_model_slug(args.model_path)} bit:{args.wbits}"
+
+
+def _pick_metric(metrics: dict) -> tuple[str | None, float | None]:
+    preferred_metrics = (
+        "acc_norm,none",
+        "acc,none",
+        "exact_match,strict-match",
+        "exact_match,flexible-extract",
+        "exact_match,none",
+        "exact_match",
+        "f1,none",
+        "acc",
+    )
+    if not isinstance(metrics, dict):
+        return None, None
+    for metric_name in preferred_metrics:
+        value = metrics.get(metric_name)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return metric_name, float(value)
+    for metric_name, value in metrics.items():
+        if metric_name.endswith("_stderr") or metric_name == "alias":
+            continue
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return metric_name, float(value)
+    return None, None
+
+
+def _collect_lm_eval_tasks(payload: dict) -> dict:
+    collected = {}
+    if not isinstance(payload, dict):
+        return collected
+    for section in (
+        payload.get("summary", {}),
+        payload.get("raw", {}).get("results", {}),
+        payload.get("raw", {}).get("groups", {}),
+    ):
+        if isinstance(section, dict):
+            collected.update(section)
+    return collected
+
+
+def _lm_eval_avg(task_results: dict, requested_tasks: list[str]) -> float | None:
+    if not isinstance(task_results, dict):
+        return None
+    values = []
+    tasks = requested_tasks or list(task_results)
+    for task in tasks:
+        _, value = _pick_metric(task_results.get(task, {}))
+        if value is not None:
+            values.append(value)
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def _log_summary_to_wandb(args, summary: dict):
+    if not getattr(args, "use_wandb", False):
+        return
+    try:
+        import wandb
+    except ImportError:
+        print("Warning: wandb is not installed; skipping W&B logging.")
+        return
+
+    api_key = resolve_wandb_api_key()
+    if api_key:
+        try:
+            wandb.login(key=api_key, relogin=True)
+        except Exception as exc:
+            print(f"Warning: wandb login failed; skipping W&B logging: {exc}")
+            return
+
+    variant = summary.get("variant", "unknown")
+    quant = summary.get("quantization", {})
+    eval_section = summary.get("evaluation", {})
+    model_slug = build_model_slug(summary.get("model_path", args.model_path))
+    bits = quant.get("bits", getattr(args, "wbits", None))
+    run_name = f"gptvq_{model_slug}_{bits}bit_{variant}"
+
+    metrics = {}
+    for dataset_name, row in eval_section.get("perplexity", {}).items():
+        if isinstance(row, dict):
+            value = row.get("perplexity")
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                metrics[f"perplexity/{dataset_name}"] = float(value)
+
+    lm_eval = eval_section.get("lm_eval", {})
+    payload = next(iter(lm_eval.values()), {}) if isinstance(lm_eval, dict) and lm_eval else {}
+    task_results = _collect_lm_eval_tasks(payload)
+    metrics.update(collect_lm_eval_wandb_metrics(task_results))
+    avg = _lm_eval_avg(task_results, eval_section.get("lm_eval_tasks", []))
+    if avg is not None:
+        metrics["lm_eval/avg"] = avg
+
+    try:
+        run = wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            name=run_name,
+            job_type="gptvq_rbvt",
+            tags=[
+                "gptvq",
+                f"model:{model_slug}",
+                f"bits:{bits}",
+                f"variant:{variant}",
+            ],
+            config={**vars(args), "variant": variant, "model_slug": model_slug, "bits": bits},
+            reinit=True,
+        )
+        if run is None:
+            return
+        if metrics:
+            wandb.log(metrics)
+        for key, value in quant.items():
+            if isinstance(value, (int, float, str, bool)) or value is None:
+                wandb.summary[f"quant/{key}"] = value
+        wandb.summary["model_path"] = summary.get("model_path")
+        wandb.summary["output_dir"] = summary.get("output_dir")
+        wandb.finish()
+        print(f"W&B logged {variant} | metrics={sorted(metrics)}")
+    except Exception as exc:
+        print(f"Warning: W&B logging failed for {variant}: {exc}")
 
 
 def _hf_device(device: str) -> torch.device:
@@ -618,7 +750,7 @@ def quantize_model_gptvq_1d(
         if stop_after_linear_layers > 0 and quantized_layers >= stop_after_linear_layers:
             print(f"Stopping GPTVQ debug after {quantized_layers} Linear layers.")
             break
-        print(f"\n=== GPTVQ layer {layer_idx + 1}/{len(layers)} ===")
+        print(f"\n=== GPTVQ layer {layer_idx + 1}/{len(layers)} ({_run_context(args)}) ===")
         layer = layers[layer_idx].to(device)
         full = find_layers(layer)
 
@@ -930,6 +1062,7 @@ def evaluate_model(model_path: str, label: str, args, hf_token: str | None) -> t
             output_dir=args.lm_eval_output_dir,
             run_name=label.lower(),
             hf_token=hf_token,
+            run_context=_run_context(args),
         )
         lm_eval = runner.run({label: model_path})
     return perplexity, lm_eval
@@ -1025,6 +1158,7 @@ def run_variant(variant: str, args, hf_token: str | None):
         "args": vars(args),
     }
     _write_summary(output_dir, summary)
+    _log_summary_to_wandb(args, summary)
     if args.cleanup_model_artifacts:
         _cleanup_model_artifacts(output_dir)
         print(f"Cleaned model artifacts under {output_dir}; kept run_summary.json")
@@ -1162,6 +1296,7 @@ def run_single_pass_compare(args, hf_token: str | None) -> list[dict]:
             lm_eval=lm_eval,
         )
         _write_summary(output_dir, summary)
+        _log_summary_to_wandb(args, summary)
         summaries.append(summary)
         if args.cleanup_model_artifacts:
             _cleanup_model_artifacts(output_dir)
@@ -1171,42 +1306,6 @@ def run_single_pass_compare(args, hf_token: str | None) -> list[dict]:
 
 
 def print_comparison(summaries: list[dict]):
-    preferred_metrics = (
-        "acc_norm,none",
-        "acc,none",
-        "exact_match,none",
-        "exact_match",
-        "f1,none",
-        "acc",
-    )
-
-    def pick_metric(metrics: dict) -> tuple[str | None, float | None]:
-        if not isinstance(metrics, dict):
-            return None, None
-        for metric_name in preferred_metrics:
-            value = metrics.get(metric_name)
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                return metric_name, float(value)
-        for metric_name, value in metrics.items():
-            if metric_name.endswith("_stderr") or metric_name == "alias":
-                continue
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                return metric_name, float(value)
-        return None, None
-
-    def collect_task_summary(payload: dict) -> dict:
-        collected = {}
-        if not isinstance(payload, dict):
-            return collected
-        for section in (
-            payload.get("summary", {}),
-            payload.get("raw", {}).get("results", {}),
-            payload.get("raw", {}).get("groups", {}),
-        ):
-            if isinstance(section, dict):
-                collected.update(section)
-        return collected
-
     print("\n" + "=" * 80)
     print("GPTVQ 1D COMPARISON")
     print("=" * 80)
@@ -1219,11 +1318,22 @@ def print_comparison(summaries: list[dict]):
             value = ppl.get(dataset_name, {}).get("perplexity")
             print(f"  ppl/{dataset_name}: {value:.4f}" if isinstance(value, float) else f"  ppl/{dataset_name}: MISSING")
         payload = next(iter(lm_eval.values()), {}) if isinstance(lm_eval, dict) and lm_eval else {}
-        task_summary = collect_task_summary(payload)
+        task_summary = _collect_lm_eval_tasks(payload)
         lm_values = []
         for task in summary.get("evaluation", {}).get("lm_eval_tasks", []):
             metrics = task_summary.get(task, {})
-            metric_name, metric_value = pick_metric(metrics)
+            if task == "gsm8k" and isinstance(metrics, dict):
+                strict = metrics.get("exact_match,strict-match")
+                flex = metrics.get("exact_match,flexible-extract")
+                if isinstance(strict, (int, float)) and not isinstance(strict, bool):
+                    print(f"  lm_eval/{task}/exact_match,strict-match: {strict:.4f}")
+                    lm_values.append(float(strict))
+                if isinstance(flex, (int, float)) and not isinstance(flex, bool):
+                    print(f"  lm_eval/{task}/exact_match,flexible-extract: {flex:.4f}")
+                if not isinstance(strict, (int, float)) and not isinstance(flex, (int, float)):
+                    print(f"  lm_eval/{task}: MISSING")
+                continue
+            metric_name, metric_value = _pick_metric(metrics)
             if metric_value is None:
                 print(f"  lm_eval/{task}: MISSING")
             else:
@@ -1238,6 +1348,7 @@ def build_parser():
     parser.add_argument("--model-path", default="TinyLlama/TinyLlama-1.1B-Chat-v1.0")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--output-root", default="./outputs/gptvq_1d_rbvt_colab")
+    parser.add_argument("--run-context", default="", help="Context prefix printed in long-running quant/eval logs.")
     parser.add_argument(
         "--variants",
         nargs="+",
@@ -1337,6 +1448,10 @@ def build_parser():
     parser.add_argument("--lm-eval-batch-size", default="auto")
     parser.add_argument("--lm-eval-limit", type=float, default=None)
     parser.add_argument("--lm-eval-output-dir", default="./outputs/gptvq_1d_rbvt_colab/lm_eval")
+    parser.add_argument("--use-wandb", action="store_true", default=False)
+    parser.add_argument("--no-wandb", dest="use_wandb", action="store_false")
+    parser.add_argument("--wandb-project", default="rbvtquant")
+    parser.add_argument("--wandb-entity", default=None)
     parser.add_argument("--cleanup-model-artifacts", action="store_true", default=True)
     parser.add_argument("--keep-model-artifacts", dest="cleanup_model_artifacts", action="store_false")
     return parser

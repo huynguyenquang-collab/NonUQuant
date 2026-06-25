@@ -22,6 +22,7 @@ class LMEvalHarnessRunner:
         output_dir: str = "./outputs/lm_eval",
         run_name: str | None = None,
         hf_token: str | None = None,
+        run_context: str | None = None,
     ):
         self.tasks = tasks
         self.device = device
@@ -31,6 +32,7 @@ class LMEvalHarnessRunner:
         self.output_dir = Path(output_dir)
         self.run_name = run_name or datetime.now().strftime("%Y%m%d-%H%M%S")
         self.hf_token = hf_token
+        self.run_context = run_context
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def _model_args(self, model_path: str) -> str:
@@ -165,6 +167,7 @@ class LMEvalHarnessRunner:
     def run(self, model_paths: dict[str, str]) -> dict:
         results = {}
         for model_name, model_path in model_paths.items():
-            print(f"\nRunning lm-eval for {model_name} on {', '.join(self.tasks)}...")
+            prefix = f"[{self.run_context}] " if self.run_context else ""
+            print(f"\n{prefix}Running lm-eval for {model_name} on {', '.join(self.tasks)}...")
             results[model_name] = self.evaluate_model(model_name, model_path)
         return results
