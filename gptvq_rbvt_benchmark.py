@@ -1171,6 +1171,42 @@ def run_single_pass_compare(args, hf_token: str | None) -> list[dict]:
 
 
 def print_comparison(summaries: list[dict]):
+    preferred_metrics = (
+        "acc_norm,none",
+        "acc,none",
+        "exact_match,none",
+        "exact_match",
+        "f1,none",
+        "acc",
+    )
+
+    def pick_metric(metrics: dict) -> tuple[str | None, float | None]:
+        if not isinstance(metrics, dict):
+            return None, None
+        for metric_name in preferred_metrics:
+            value = metrics.get(metric_name)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return metric_name, float(value)
+        for metric_name, value in metrics.items():
+            if metric_name.endswith("_stderr") or metric_name == "alias":
+                continue
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return metric_name, float(value)
+        return None, None
+
+    def collect_task_summary(payload: dict) -> dict:
+        collected = {}
+        if not isinstance(payload, dict):
+            return collected
+        for section in (
+            payload.get("summary", {}),
+            payload.get("raw", {}).get("results", {}),
+            payload.get("raw", {}).get("groups", {}),
+        ):
+            if isinstance(section, dict):
+                collected.update(section)
+        return collected
+
     print("\n" + "=" * 80)
     print("GPTVQ 1D COMPARISON")
     print("=" * 80)
@@ -1183,21 +1219,18 @@ def print_comparison(summaries: list[dict]):
             value = ppl.get(dataset_name, {}).get("perplexity")
             print(f"  ppl/{dataset_name}: {value:.4f}" if isinstance(value, float) else f"  ppl/{dataset_name}: MISSING")
         payload = next(iter(lm_eval.values()), {}) if isinstance(lm_eval, dict) and lm_eval else {}
-        task_summary = payload.get("summary", {}) if isinstance(payload, dict) else {}
+        task_summary = collect_task_summary(payload)
+        lm_values = []
         for task in summary.get("evaluation", {}).get("lm_eval_tasks", []):
             metrics = task_summary.get(task, {})
-            metric_value = None
-            metric_name = None
-            if isinstance(metrics, dict):
-                for candidate in ("acc,none", "acc_norm,none", "exact_match,none", "exact_match"):
-                    if isinstance(metrics.get(candidate), (int, float)):
-                        metric_name = candidate
-                        metric_value = float(metrics[candidate])
-                        break
+            metric_name, metric_value = pick_metric(metrics)
             if metric_value is None:
                 print(f"  lm_eval/{task}: MISSING")
             else:
                 print(f"  lm_eval/{task}/{metric_name}: {metric_value:.4f}")
+                lm_values.append(metric_value)
+        if lm_values:
+            print(f"  lm_eval/avg: {sum(lm_values) / len(lm_values):.4f}")
 
 
 def build_parser():

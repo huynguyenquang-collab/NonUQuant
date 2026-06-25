@@ -121,10 +121,8 @@ import sys
 
 tag, path = sys.argv[1], sys.argv[2]
 preferred = (
-    "acc,none",
     "acc_norm,none",
-    "exact_match,strict-match",
-    "exact_match,flexible-extract",
+    "acc,none",
     "exact_match,none",
     "exact_match",
     "f1,none",
@@ -160,9 +158,17 @@ def lm_eval_payload(summary):
     if not isinstance(lm_eval, dict) or not lm_eval:
         return {}, []
     payload = next(iter(lm_eval.values()), {})
-    task_summary = payload.get("summary", {}) if isinstance(payload, dict) else {}
+    task_summary = {}
+    if isinstance(payload, dict):
+        for section in (
+            payload.get("summary", {}),
+            payload.get("raw", {}).get("results", {}),
+            payload.get("raw", {}).get("groups", {}),
+        ):
+            if isinstance(section, dict):
+                task_summary.update(section)
     tasks = summary.get("evaluation", {}).get("lm_eval_tasks") or payload.get("tasks") or []
-    return task_summary if isinstance(task_summary, dict) else {}, list(tasks)
+    return task_summary, list(tasks)
 
 try:
     s = json.load(open(path))
@@ -353,4 +359,89 @@ echo ""
 echo "Comparison:"
 echo "----------------------------------------------------------------"
 column -t -s$'\t' "$OUT_ROOT/perplexity_table.tsv" 2>/dev/null || cat "$OUT_ROOT/perplexity_table.tsv"
+echo ""
+echo "LM-eval detail:"
+echo "----------------------------------------------------------------"
+python - "$OUT_ROOT" "$SLUG" <<'PYEOF'
+import json
+import sys
+from pathlib import Path
+
+out_root = Path(sys.argv[1])
+slug = sys.argv[2]
+summary_paths = [
+    ("base", out_root / "gptvq" / "run_summary.json"),
+    ("rbvt_post_module", out_root / "gptvq_rbvt" / "run_summary.json"),
+    ("base", out_root / f"{slug}_base" / "run_summary.json"),
+    ("rbvt_post_module", out_root / f"{slug}_rbvt_post_module" / "run_summary.json"),
+]
+preferred = (
+    "acc_norm,none",
+    "acc,none",
+    "exact_match,none",
+    "exact_match",
+    "f1,none",
+    "acc",
+)
+
+def pick_metric(metrics):
+    if not isinstance(metrics, dict):
+        return None, None
+    for name in preferred:
+        value = metrics.get(name)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return name, float(value)
+    for name, value in metrics.items():
+        if name.endswith("_stderr") or name == "alias":
+            continue
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return name, float(value)
+    return None, None
+
+def collect_lm_eval(summary):
+    lm_eval = summary.get("evaluation", {}).get("lm_eval", {})
+    if not isinstance(lm_eval, dict) or not lm_eval:
+        return [], {}
+    payload = next(iter(lm_eval.values()), {})
+    if not isinstance(payload, dict):
+        return [], {}
+    task_summary = {}
+    for section in (
+        payload.get("summary", {}),
+        payload.get("raw", {}).get("results", {}),
+        payload.get("raw", {}).get("groups", {}),
+    ):
+        if isinstance(section, dict):
+            task_summary.update(section)
+    tasks = summary.get("evaluation", {}).get("lm_eval_tasks") or payload.get("tasks") or list(task_summary)
+    return list(tasks), task_summary
+
+seen = set()
+printed = False
+for tag, path in summary_paths:
+    if tag in seen or not path.exists():
+        continue
+    seen.add(tag)
+    summary = json.load(open(path))
+    tasks, task_summary = collect_lm_eval(summary)
+    print(f"[{tag}]")
+    if not tasks:
+        print("  lm_eval: MISSING")
+        printed = True
+        continue
+    values = []
+    for task in tasks:
+        metric_name, metric_value = pick_metric(task_summary.get(task, {}))
+        if metric_value is None:
+            print(f"  {task:<18} MISSING")
+        else:
+            print(f"  {task:<18} {metric_name:<16} {metric_value:.4f}")
+            values.append(metric_value)
+    if values:
+        print(f"  {'avg':<18} {'':<16} {sum(values) / len(values):.4f}")
+    printed = True
+
+if not printed:
+    print("No run_summary.json found for base/RBVT.")
+PYEOF
 echo "================================================================"
