@@ -114,12 +114,12 @@ ensure_redpajama_cache() {
   local url
   url="$(token_url_for_basename "${basename}")"
   if [[ -n "${url}" ]]; then
-    log "Downloading GuidedQuant RedPajama token cache for ${basename}"
+    log "Downloading GuidedQuant RedPajama token cache for ${basename}" >&2
     wget -O "${token_path}" "${url}"
     echo "${token_path}"
     return
   fi
-  log "No release token URL for ${basename}; RedPajama mirror will be sampled by calibration_utils"
+  log "No release token URL for ${basename}; RedPajama mirror will be sampled by calibration_utils" >&2
   echo ""
 }
 
