@@ -27,12 +27,26 @@ class _InputCatcher(nn.Module):
         self.state = state
 
     def forward(self, hidden_states, **kwargs):
-        self.inputs.append(hidden_states.detach())
+        self.inputs.append(hidden_states.detach().cpu())
         self.state["kwargs"] = kwargs
         raise _StopCapture
 
 
-def _forward_layer(layer: nn.Module, hidden_states: torch.Tensor, kwargs: dict):
+def _to_device(value, device: str):
+    if torch.is_tensor(value):
+        return value.to(device, non_blocking=True)
+    if isinstance(value, tuple):
+        return tuple(_to_device(item, device) for item in value)
+    if isinstance(value, list):
+        return [_to_device(item, device) for item in value]
+    if isinstance(value, dict):
+        return {key: _to_device(item, device) for key, item in value.items()}
+    return value
+
+
+def _forward_layer(layer: nn.Module, hidden_states: torch.Tensor, kwargs: dict, device: str):
+    hidden_states = hidden_states.to(device, non_blocking=True)
+    kwargs = _to_device(kwargs, device)
     output = layer(hidden_states, **kwargs)
     return output[0] if isinstance(output, (tuple, list)) else output
 
@@ -181,7 +195,7 @@ def collect_leanquant_codebooks(
                         unit="sample",
                         leave=False,
                     ):
-                        _forward_layer(layer, sample, layer_kwargs)
+                        _forward_layer(layer, sample, layer_kwargs, device)
                 finally:
                     for handle in handles:
                         handle.remove()
@@ -223,7 +237,7 @@ def collect_leanquant_codebooks(
             unit="sample",
             leave=False,
         ):
-            outs.append(_forward_layer(layer, sample, layer_kwargs).detach())
+            outs.append(_forward_layer(layer, sample, layer_kwargs, device).detach().cpu())
         inps = outs
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
