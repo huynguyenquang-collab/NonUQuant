@@ -54,6 +54,7 @@ PPL_DENSE_DTYPE="${PPL_DENSE_DTYPE:-float16}"
 
 NF_METHOD="${NF_METHOD:-rtn}"
 LEAN_SQUEEZE_METHODS="${LEAN_SQUEEZE_METHODS:-rtn}"
+LEAN_SQUEEZE_CODEBOOKS="${LEAN_SQUEEZE_CODEBOOKS:-leanquant squeezellm}"
 SQUEEZELLM_MODE="${SQUEEZELLM_MODE:-dense-only}"
 LEANQUANT_EXPONENT="${LEANQUANT_EXPONENT:-4.0}"
 LEANQUANT_PERCDAMP="${LEANQUANT_PERCDAMP:-0.1}"
@@ -251,34 +252,45 @@ run_nf_like() {
 run_lean_squeeze() {
   local label="$1" model="$2" bits="$3" token_path="$4"
   local run_dir="${OUTPUT_ROOT}/${label}/${bits}bit/lean_squeeze"
-  if [[ -s "${run_dir}/benchmark_results.json" && "${OVERWRITE}" != "1" && "${FORCE_EVAL}" != "1" ]]; then
+  local complete=1
+  local codebook method
+  for codebook in ${LEAN_SQUEEZE_CODEBOOKS}; do
+    for method in ${LEAN_SQUEEZE_METHODS}; do
+      if [[ ! -s "${run_dir}/${codebook}_${bits}bit_${method}/run_summary.json" ]]; then
+        complete=0
+      fi
+    done
+  done
+  if [[ "${complete}" == "1" && "${OVERWRITE}" != "1" && "${FORCE_EVAL}" != "1" ]]; then
     log "Skipping existing Lean/Squeeze benchmark: ${run_dir}"
     return
   fi
-  log "Running LeanQuant + SqueezeLLM ${bits}-bit: ${label}"
   local -a args
   mapfile -t args < <(lm_eval_args)
-  CALIB_TOKENS_PATH="${token_path}" "${PYTHON_BIN}" codebook_benchmark.py \
-    --model-path "${model}" \
-    --device "${DEVICE}" \
-    --output-root "${run_dir}" \
-    --codebooks leanquant squeezellm \
-    --bits "${bits}" \
-    --methods ${LEAN_SQUEEZE_METHODS} \
-    --resume \
-    --calib-dataset "${DATASET}" \
-    --n-calib "${NSAMPLES}" \
-    --max-length "${SEQLEN}" \
-    --squeezellm-mode "${SQUEEZELLM_MODE}" \
-    --leanquant-exponent "${LEANQUANT_EXPONENT}" \
-    --leanquant-percdamp "${LEANQUANT_PERCDAMP}" \
-    --eval-stride "${EVAL_STRIDE}" \
-    --eval-max-length "${EVAL_MAX_LENGTH}" \
-    --eval-samples "${EVAL_SAMPLES}" \
-    --eval-cache-dir "${CACHE_ROOT}/eval_cache" \
-    --lm-eval-output-dir "${run_dir}/lm_eval" \
-    --no-wandb \
-    "${args[@]}"
+  for codebook in ${LEAN_SQUEEZE_CODEBOOKS}; do
+    log "Running ${codebook} ${bits}-bit: ${label}"
+    CALIB_TOKENS_PATH="${token_path}" "${PYTHON_BIN}" codebook_benchmark.py \
+      --model-path "${model}" \
+      --device "${DEVICE}" \
+      --output-root "${run_dir}" \
+      --codebooks "${codebook}" \
+      --bits "${bits}" \
+      --methods ${LEAN_SQUEEZE_METHODS} \
+      --resume \
+      --calib-dataset "${DATASET}" \
+      --n-calib "${NSAMPLES}" \
+      --max-length "${SEQLEN}" \
+      --squeezellm-mode "${SQUEEZELLM_MODE}" \
+      --leanquant-exponent "${LEANQUANT_EXPONENT}" \
+      --leanquant-percdamp "${LEANQUANT_PERCDAMP}" \
+      --eval-stride "${EVAL_STRIDE}" \
+      --eval-max-length "${EVAL_MAX_LENGTH}" \
+      --eval-samples "${EVAL_SAMPLES}" \
+      --eval-cache-dir "${CACHE_ROOT}/eval_cache" \
+      --lm-eval-output-dir "${run_dir}/lm_eval" \
+      --no-wandb \
+      "${args[@]}"
+  done
 }
 
 variant_folder() {

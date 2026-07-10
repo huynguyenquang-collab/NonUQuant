@@ -742,6 +742,7 @@ def run_one(args, codebook_name: str, bits: int, method: str) -> dict:
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
 
     run_label = method.upper()
     if args.skip_perplexity:
@@ -1018,6 +1019,7 @@ def main():
                 gc.collect()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
+                    torch.cuda.ipc_collect()
     write_reports(Path(args.output_root), summaries)
     elapsed = time.monotonic() - benchmark_started_at
     print(f"Done. completed_runs={len(summaries)}/{total_runs} | elapsed={elapsed:.1f}s")
