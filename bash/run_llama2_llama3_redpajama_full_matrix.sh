@@ -41,10 +41,11 @@ RUN_GPTVQ="${RUN_GPTVQ:-1}"
 RUN_LMEVAL="${RUN_LMEVAL:-1}"
 RUN_PPL="${RUN_PPL:-1}"
 
-LM_EVAL_TASKS="${LM_EVAL_TASKS:-mmlu gsm8k}"
+LM_EVAL_TASKS="${LM_EVAL_TASKS:-arc_challenge arc_easy boolq hellaswag lambada_openai openbookqa piqa rte winogrande mmlu gsm8k}"
 LM_EVAL_BATCH_SIZE="${LM_EVAL_BATCH_SIZE:-auto}"
 LM_EVAL_NUM_FEWSHOT="${LM_EVAL_NUM_FEWSHOT:-0}"
 LM_EVAL_LIMIT="${LM_EVAL_LIMIT:-}"
+USE_WANDB="${USE_WANDB:-1}"
 
 EVAL_STRIDE="${EVAL_STRIDE:-512}"
 EVAL_MAX_LENGTH="${EVAL_MAX_LENGTH:-2048}"
@@ -220,6 +221,14 @@ lm_eval_args() {
   fi
 }
 
+wandb_args() {
+  if [[ "${USE_WANDB}" == "1" ]]; then
+    echo "--use-wandb"
+  else
+    echo "--no-wandb"
+  fi
+}
+
 run_nf_like() {
   local label="$1" model="$2" bits="$3" quantizer="$4" token_path="$5"
   local run_dir="${OUTPUT_ROOT}/${label}/${bits}bit/${quantizer}_${NF_METHOD}"
@@ -230,6 +239,8 @@ run_nf_like() {
   log "Running ${quantizer} ${bits}-bit ${NF_METHOD}: ${label}"
   local -a args
   mapfile -t args < <(lm_eval_args)
+  local -a wb_args
+  mapfile -t wb_args < <(wandb_args)
   CALIB_TOKENS_PATH="${token_path}" "${PYTHON_BIN}" main.py \
     --model-path "${model}" \
     --device "${DEVICE}" \
@@ -245,7 +256,7 @@ run_nf_like() {
     --eval-samples "${EVAL_SAMPLES}" \
     --eval-cache-dir "${CACHE_ROOT}/eval_cache" \
     --lm-eval-output-dir "${run_dir}/lm_eval" \
-    --no-wandb \
+    "${wb_args[@]}" \
     "${args[@]}"
 }
 
@@ -267,6 +278,8 @@ run_lean_squeeze() {
   fi
   local -a args
   mapfile -t args < <(lm_eval_args)
+  local -a wb_args
+  mapfile -t wb_args < <(wandb_args)
   for codebook in ${LEAN_SQUEEZE_CODEBOOKS}; do
     log "Running ${codebook} ${bits}-bit: ${label}"
     CALIB_TOKENS_PATH="${token_path}" "${PYTHON_BIN}" codebook_benchmark.py \
@@ -288,7 +301,7 @@ run_lean_squeeze() {
       --eval-samples "${EVAL_SAMPLES}" \
       --eval-cache-dir "${CACHE_ROOT}/eval_cache" \
       --lm-eval-output-dir "${run_dir}/lm_eval" \
-      --no-wandb \
+      "${wb_args[@]}" \
       "${args[@]}"
   done
 }
@@ -555,6 +568,8 @@ run_gptvq() {
     lmeval_args+=(--lm-eval-batch-size "${LM_EVAL_BATCH_SIZE}" --lm-eval-num-fewshot "${LM_EVAL_NUM_FEWSHOT}")
     [[ -n "${LM_EVAL_LIMIT}" ]] && lmeval_args+=(--lm-eval-limit "${LM_EVAL_LIMIT}")
   fi
+  local -a wb_args
+  mapfile -t wb_args < <(wandb_args)
   CALIB_TOKENS_PATH="${token_path}" "${PYTHON_BIN}" gptvq_rbvt_benchmark.py \
     --model-path "${model}" \
     --device "${DEVICE}" \
@@ -573,7 +588,7 @@ run_gptvq() {
     --eval-samples "${GPTVQ_EVAL_SAMPLES}" \
     --eval-cache-dir "${CACHE_ROOT}/eval_cache" \
     --lm-eval-output-dir "${run_dir}/lm_eval" \
-    --no-wandb \
+    "${wb_args[@]}" \
     "${lmeval_args[@]}"
 }
 
