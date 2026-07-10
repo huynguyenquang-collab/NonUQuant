@@ -850,7 +850,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--skip-lmhead", action="store_true", default=True)
     parser.add_argument("--no-skip-lmhead", dest="skip_lmhead", action="store_false")
-    parser.add_argument("--calib-dataset", choices=["c4", "wikitext2"], default="c4")
+    parser.add_argument("--calib-dataset", choices=["c4", "wikitext2", "redpajama"], default="c4")
     parser.add_argument("--n-calib", type=int, default=128)
     parser.add_argument("--max-length", type=int, default=2048)
     parser.add_argument("--seed", type=int, default=42)

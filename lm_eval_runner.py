@@ -5,6 +5,8 @@ lm-evaluation-harness integration for RBVTQuant.
 from __future__ import annotations
 
 import json
+import os
+import inspect
 from datetime import datetime
 from pathlib import Path
 
@@ -23,6 +25,7 @@ class LMEvalHarnessRunner:
         run_name: str | None = None,
         hf_token: str | None = None,
         run_context: str | None = None,
+        gen_kwargs: str | dict | None = None,
     ):
         self.tasks = tasks
         self.device = device
@@ -33,7 +36,36 @@ class LMEvalHarnessRunner:
         self.run_name = run_name or datetime.now().strftime("%Y%m%d-%H%M%S")
         self.hf_token = hf_token
         self.run_context = run_context
+        self.gen_kwargs = self._parse_gen_kwargs(gen_kwargs or os.getenv("LM_EVAL_GEN_KWARGS", ""))
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def _parse_gen_kwargs(self, value: str | dict | None) -> dict:
+        if not value:
+            return {}
+        if isinstance(value, dict):
+            return value
+        parsed = {}
+        for item in str(value).split(","):
+            item = item.strip()
+            if not item or "=" not in item:
+                continue
+            key, raw = item.split("=", 1)
+            raw = raw.strip()
+            if raw.lower() in {"true", "false"}:
+                parsed[key.strip()] = raw.lower() == "true"
+                continue
+            try:
+                parsed[key.strip()] = int(raw)
+                continue
+            except ValueError:
+                pass
+            try:
+                parsed[key.strip()] = float(raw)
+                continue
+            except ValueError:
+                pass
+            parsed[key.strip()] = raw
+        return parsed
 
     def _model_args(self, model_path: str) -> str:
         dtype = "float16" if self.device.startswith("cuda") else "float32"
@@ -147,16 +179,26 @@ class LMEvalHarnessRunner:
                 "lm-eval is not installed. Install the 'lm-eval' package or disable lm-eval with --no-lm-eval."
             ) from exc
 
-        payload = evaluator.simple_evaluate(
-            model="hf",
-            model_args=self._model_args(model_path),
-            tasks=self.tasks,
-            device=self.device,
-            batch_size=self.batch_size,
-            num_fewshot=self.num_fewshot,
-            limit=self.limit,
-            log_samples=False,
-        )
+        kwargs = {
+            "model": "hf",
+            "model_args": self._model_args(model_path),
+            "tasks": self.tasks,
+            "device": self.device,
+            "batch_size": self.batch_size,
+            "num_fewshot": self.num_fewshot,
+            "limit": self.limit,
+            "log_samples": False,
+        }
+        if self.gen_kwargs:
+            params = inspect.signature(evaluator.simple_evaluate).parameters
+            if "gen_kwargs" in params:
+                kwargs["gen_kwargs"] = self.gen_kwargs
+            else:
+                print(
+                    "lm-eval simple_evaluate does not accept gen_kwargs; "
+                    f"ignoring {self.gen_kwargs}"
+                )
+        payload = evaluator.simple_evaluate(**kwargs)
         self._write_raw_results(model_name, payload)
         return {
             "tasks": list(self.tasks),

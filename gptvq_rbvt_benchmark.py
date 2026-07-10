@@ -1388,7 +1388,7 @@ def build_parser():
     parser.add_argument("--sym", action="store_true", default=False)
     parser.add_argument("--n-calib", type=int, default=32)
     parser.add_argument("--max-length", type=int, default=512)
-    parser.add_argument("--calib-dataset", choices=["c4", "wikitext2"], default="wikitext2")
+    parser.add_argument("--calib-dataset", choices=["c4", "wikitext2", "redpajama"], default="wikitext2")
     parser.add_argument("--calibration-cache-dir", default="./calibration_cache")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--row-chunk", type=int, default=1024)

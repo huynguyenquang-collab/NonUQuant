@@ -7,6 +7,7 @@ NCCQuant at runtime.
 
 from __future__ import annotations
 
+import os
 import pickle
 import random
 from pathlib import Path
@@ -135,10 +136,105 @@ def get_wikitext2_calibration_data(tokenizer, n_samples=128, seqlen=2048, seed=4
     return calibration_texts
 
 
+def _normalize_token_cache(tokens, seqlen: int) -> list[torch.Tensor]:
+    if isinstance(tokens, torch.Tensor):
+        if tokens.ndim == 2:
+            return [tokens[i : i + 1, :seqlen].long() for i in range(tokens.shape[0])]
+        if tokens.ndim == 3 and tokens.shape[1] == 1:
+            return [tokens[i, :, :seqlen].long() for i in range(tokens.shape[0])]
+        raise ValueError(f"Unsupported token tensor shape: {tuple(tokens.shape)}")
+    if isinstance(tokens, (list, tuple)):
+        out = []
+        for item in tokens:
+            if not isinstance(item, torch.Tensor):
+                raise TypeError(f"Unsupported token item type: {type(item).__name__}")
+            item = item.detach().cpu().long()
+            if item.ndim == 1:
+                item = item.unsqueeze(0)
+            if item.ndim != 2 or item.shape[0] != 1:
+                raise ValueError(f"Unsupported token item shape: {tuple(item.shape)}")
+            out.append(item[:, :seqlen])
+        return out
+    raise TypeError(f"Unsupported token cache type: {type(tokens).__name__}")
+
+
+def get_redpajama_calibration_data(
+    tokenizer,
+    n_samples=1024,
+    seqlen=4096,
+    seed=0,
+    cache_dir="./calibration_cache",
+):
+    """Load GuidedQuant-style RedPajama calibration as decoded text.
+
+    If CALIB_TOKENS_PATH points to a GuidedQuant token cache, that exact cache is
+    used. Otherwise this samples the public mirror by the same random document +
+    random span protocol used by the BV-SQ/LNQ utilities.
+    """
+
+    cache_path = Path(cache_dir)
+    cache_path.mkdir(parents=True, exist_ok=True)
+    explicit_cache = os.environ.get("CALIB_TOKENS_PATH", "")
+    if explicit_cache and Path(explicit_cache).exists():
+        print(f"\n[RedPajama Calibration Data] Loading token cache: {explicit_cache}")
+        try:
+            tokens = torch.load(explicit_cache, map_location="cpu", weights_only=False)
+        except TypeError:
+            tokens = torch.load(explicit_cache, map_location="cpu")
+        rows = _normalize_token_cache(tokens, seqlen)[:n_samples]
+        return [tokenizer.decode(row[0], skip_special_tokens=True) for row in rows]
+
+    cache_file = cache_path / f"redpajama_calib_n{n_samples}_len{seqlen}_seed{seed}.pkl"
+    if cache_file.exists():
+        print(f"\n  Loading from cache: {cache_file}")
+        with open(cache_file, "rb") as f:
+            return pickle.load(f)
+
+    dataset_name = os.environ.get("REDPAJAMA_DATASET", "ZengXiangyu/RedPajama-Data-1T-Sample")
+    config = os.environ.get("REDPAJAMA_CONFIG", "")
+    split = os.environ.get("REDPAJAMA_SPLIT", "train")
+    print(
+        "\n[RedPajama Calibration Data]\n"
+        f"  Dataset: {dataset_name}\n"
+        f"  Config: {config or '<none>'}\n"
+        f"  Split: {split}\n"
+        f"  Samples: {n_samples}\n"
+        f"  Sequence length: {seqlen}\n"
+        f"  Seed: {seed}"
+    )
+    args = [dataset_name]
+    if config:
+        args.append(config)
+    raw = load_dataset(*args, split=split, trust_remote_code=True)
+    rng = random.Random(seed)
+    texts = []
+    seen = set()
+    while len(texts) < n_samples:
+        idx = rng.randint(0, len(raw) - 1)
+        if idx in seen and len(seen) < len(raw):
+            continue
+        seen.add(idx)
+        item = raw[idx]
+        text = item.get("text", "")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        enc = tokenizer(text, return_tensors="pt").input_ids
+        if enc.shape[1] < seqlen:
+            continue
+        start = rng.randint(0, enc.shape[1] - seqlen)
+        texts.append(tokenizer.decode(enc[0, start : start + seqlen], skip_special_tokens=True))
+
+    with open(cache_file, "wb") as f:
+        pickle.dump(texts, f)
+    return texts
+
+
 def load_calibration_data(dataset_name, tokenizer, n_samples=128, seqlen=2048, seed=42, cache_dir="./calibration_cache"):
     dataset_name = dataset_name.lower()
     if dataset_name == "c4":
         return get_c4_calibration_data(tokenizer, n_samples, seqlen, seed, cache_dir=cache_dir)
     if dataset_name in ["wikitext2", "wikitext"]:
         return get_wikitext2_calibration_data(tokenizer, n_samples, seqlen, seed, split="train", cache_dir=cache_dir)
-    raise ValueError(f"Unknown dataset: {dataset_name}. Use 'c4' or 'wikitext2'")
+    if dataset_name == "redpajama":
+        return get_redpajama_calibration_data(tokenizer, n_samples, seqlen, seed, cache_dir=cache_dir)
+    raise ValueError(f"Unknown dataset: {dataset_name}. Use 'c4', 'wikitext2', or 'redpajama'")
