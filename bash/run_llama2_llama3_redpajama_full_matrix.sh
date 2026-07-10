@@ -65,7 +65,7 @@ LNQ_DEVICES="${LNQ_DEVICES:-}"
 LNQ_ACTIVATION_STORAGE="${LNQ_ACTIVATION_STORAGE:-disk}"
 LNQ_HESSIAN_SAVE_DTYPE="${LNQ_HESSIAN_SAVE_DTYPE:-float16}"
 
-BV_SQ_VARIANTS="${BV_SQ_VARIANTS:-greedy_l1 hier_l1}"
+BV_SQ_VARIANTS="${BV_SQ_VARIANTS:-greedy_l1_rbvt}"
 BV_MODEL_DTYPE="${BV_MODEL_DTYPE:-float16}"
 BV_N_CALIB="${BV_N_CALIB:-1024}"
 BV_BATCH_SIZE="${BV_BATCH_SIZE:-1}"
@@ -73,6 +73,12 @@ BV_CPU_COUNT="${BV_CPU_COUNT:-16}"
 BV_ROW_CHUNKSIZE="${BV_ROW_CHUNKSIZE:-8}"
 BV_H_SOURCE="${BV_H_SOURCE:-variance}"
 BV_H_FLOOR="${BV_H_FLOOR:-1e-8}"
+RBVT_LAMBDA="${RBVT_LAMBDA:-1.0}"
+RBVT_BUDGET_P="${RBVT_BUDGET_P:-1.0}"
+RBVT_TARGET_RATIO="${RBVT_TARGET_RATIO:-1.0}"
+RBVT_MSE_GUARD="${RBVT_MSE_GUARD:-0}"
+RBVT_ROW_CHUNK="${RBVT_ROW_CHUNK:-1024}"
+RBVT_GAP_FLOOR="${RBVT_GAP_FLOOR:-1e-8}"
 
 GPTVQ_GROUPSIZE="${GPTVQ_GROUPSIZE:-128}"
 GPTVQ_KMEANS_ITERS="${GPTVQ_KMEANS_ITERS:-100}"
@@ -213,6 +219,7 @@ variant_folder() {
   local root="$1" bits="$2" variant="$3"
   case "${variant}" in
     greedy_l1) echo "${root}/bv_sq_greedy_w${bits}_${DATASET}_s${NSAMPLES}_blk${SEQLEN}_lambda1.0" ;;
+    greedy_l1_rbvt) echo "${root}/bv_sq_greedy_w${bits}_${DATASET}_s${NSAMPLES}_blk${SEQLEN}_lambda1.0_rbvt" ;;
     hier_l1) echo "${root}/bv_sq_hier_w${bits}_${DATASET}_s${NSAMPLES}_blk${SEQLEN}_lambda1.0" ;;
     greedy_l0) echo "${root}/bv_sq_greedy_w${bits}_${DATASET}_s${NSAMPLES}_blk${SEQLEN}_lambda0.0" ;;
     *) echo "Unknown BV_SQ variant: ${variant}" >&2; exit 2 ;;
@@ -221,7 +228,7 @@ variant_folder() {
 
 variant_solver() {
   case "$1" in
-    greedy_l1|greedy_l0) echo "greedy" ;;
+    greedy_l1|greedy_l1_rbvt|greedy_l0) echo "greedy" ;;
     hier_l1) echo "hier" ;;
     *) echo "Unknown BV_SQ variant: $1" >&2; exit 2 ;;
   esac
@@ -230,7 +237,7 @@ variant_solver() {
 variant_lambda() {
   case "$1" in
     greedy_l0) echo "0.0" ;;
-    greedy_l1|hier_l1) echo "1.0" ;;
+    greedy_l1|greedy_l1_rbvt|hier_l1) echo "1.0" ;;
     *) echo "Unknown BV_SQ variant: $1" >&2; exit 2 ;;
   esac
 }
@@ -324,9 +331,9 @@ run_bvsq() {
   local label="$1" model="$2" bits="$3" token_path="$4" root="$5"
   local chunks="${root}/chunks"
   local stats="${root}/bv_stats_${DATASET}_s${NSAMPLES}_blk${SEQLEN}.pt"
-  for variant in ${BV_SQ_VARIANTS}; do
-    local out solver lambda
-    out="$(variant_folder "${root}" "${bits}" "${variant}")"
+  run_bvsq_base() {
+    local variant="$1" out="$2"
+    local solver lambda
     solver="$(variant_solver "${variant}")"
     lambda="$(variant_lambda "${variant}")"
     if [[ "${OVERWRITE}" == "1" || ! -d "${out}/lut" ]]; then
@@ -357,6 +364,49 @@ run_bvsq() {
         --cpu_count "${BV_CPU_COUNT}" \
         --row_chunksize "${BV_ROW_CHUNKSIZE}" \
         "${overwrite_args[@]}"
+    fi
+  }
+
+  for variant in ${BV_SQ_VARIANTS}; do
+    local out
+    out="$(variant_folder "${root}" "${bits}" "${variant}")"
+    if [[ "${variant}" == "greedy_l1_rbvt" ]]; then
+      local base_out
+      base_out="$(variant_folder "${root}" "${bits}" "greedy_l1")"
+      run_bvsq_base "greedy_l1" "${base_out}"
+      if [[ "${OVERWRITE}" == "1" || ! -d "${out}/lut" ]]; then
+        log "Running BVSQ greedy_l1 + RBVT: ${label} ${bits}-bit"
+        local -a overwrite_args=()
+        [[ "${OVERWRITE}" == "1" ]] && overwrite_args+=(--overwrite --overwrite_stats)
+        if [[ "${RBVT_MSE_GUARD}" == "1" ]]; then
+          overwrite_args+=(--rbvt_mse_guard)
+        fi
+        CALIB_TOKENS_PATH="${token_path}" "${PYTHON_BIN}" quantization/rbvt_squeezellm.py all \
+        --model "${model}" \
+        --model_chunks "${chunks}" \
+          --input_lut "${base_out}" \
+        --output_folder "${out}" \
+        --model_type "${MODEL_TYPE}" \
+        --dataset "${DATASET}" \
+        --nsamples "${NSAMPLES}" \
+        --seqlen "${SEQLEN}" \
+        --seed "${SEED}" \
+        --cache_dir "${CACHE_ROOT}/tokens" \
+        --stats_path "${stats}" \
+        --device "${DEVICE}" \
+        --model_dtype "${BV_MODEL_DTYPE}" \
+        --n_calib "${BV_N_CALIB}" \
+        --batch_size "${BV_BATCH_SIZE}" \
+        --attn_implementation "${ATTN_IMPLEMENTATION:-auto}" \
+          --rbvt_lambda "${RBVT_LAMBDA}" \
+          --rbvt_budget_p "${RBVT_BUDGET_P}" \
+          --rbvt_target_ratio "${RBVT_TARGET_RATIO}" \
+          --row_chunk "${RBVT_ROW_CHUNK}" \
+          --gap_floor "${RBVT_GAP_FLOOR}" \
+          "${overwrite_args[@]}"
+      fi
+    else
+      run_bvsq_base "${variant}" "${out}"
     fi
     eval_lut_method "${label}" "${model}" "${bits}" "${out}" "bvsq_${variant}" "${root}"
   done
