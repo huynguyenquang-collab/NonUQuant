@@ -88,11 +88,77 @@ GPTVQ_EVAL_SAMPLES="${GPTVQ_EVAL_SAMPLES:-${EVAL_SAMPLES}}"
 
 OVERWRITE="${OVERWRITE:-0}"
 FORCE_EVAL="${FORCE_EVAL:-0}"
+DISK_CLEAN_BEFORE_RUN="${DISK_CLEAN_BEFORE_RUN:-0}"
+DISK_KEEP_DENSE_LUTS="${DISK_KEEP_DENSE_LUTS:-0}"
+DISK_CLEAN_LUT_INTERMEDIATES="${DISK_CLEAN_LUT_INTERMEDIATES:-1}"
+DISK_CLEAN_EVAL_CACHE_AFTER_MODEL="${DISK_CLEAN_EVAL_CACHE_AFTER_MODEL:-0}"
 
 mkdir -p "${OUTPUT_ROOT}" "${CACHE_ROOT}" cache/tokens
 
 log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] [${JOB_NAME}] $*"
+}
+
+du_path() {
+  if [[ -e "$1" ]]; then
+    du -sh "$1" 2>/dev/null | awk '{print $1}'
+  else
+    echo "0"
+  fi
+}
+
+log_disk() {
+  log "Disk: OUTPUT_ROOT=$(du_path "${OUTPUT_ROOT}") CACHE_ROOT=$(du_path "${CACHE_ROOT}") repo_cache=$(du_path cache) free=$(df -h . | awk 'NR==2 {print $4}')"
+}
+
+preflight_disk_cleanup() {
+  if [[ "${DISK_CLEAN_BEFORE_RUN}" != "1" ]]; then
+    return
+  fi
+  log "Preflight disk cleanup enabled"
+  log_disk
+  rm -rf "${OUTPUT_ROOT}" "${CACHE_ROOT}"
+  mkdir -p "${OUTPUT_ROOT}" "${CACHE_ROOT}" cache/tokens
+  log_disk
+}
+
+cleanup_path_if_unkept() {
+  local path="$1" reason="$2"
+  if [[ "${DISK_KEEP_DENSE_LUTS}" == "1" ]]; then
+    return
+  fi
+  if [[ -e "${path}" ]]; then
+    log "Removing disk-heavy ${reason}: ${path} ($(du_path "${path}"))"
+    rm -rf "${path}"
+  fi
+}
+
+cleanup_lut_intermediates() {
+  local root="$1"
+  if [[ "${DISK_CLEAN_LUT_INTERMEDIATES}" != "1" ]]; then
+    return
+  fi
+  for path in \
+    "${root}/chunks" \
+    "${root}/squeezellm_w3" \
+    "${root}/squeezellm_w4" \
+    "${root}"/fisher_* \
+    "${root}"/lnq_hessians_* \
+    "${root}"/bv_stats_*.pt; do
+    [[ -e "${path}" ]] || continue
+    log "Removing LUT intermediate: ${path} ($(du_path "${path}"))"
+    rm -rf "${path}"
+  done
+}
+
+cleanup_eval_cache_after_model() {
+  if [[ "${DISK_CLEAN_EVAL_CACHE_AFTER_MODEL}" != "1" ]]; then
+    return
+  fi
+  if [[ -d "${CACHE_ROOT}/eval_cache" ]]; then
+    log "Removing eval cache after model: ${CACHE_ROOT}/eval_cache ($(du_path "${CACHE_ROOT}/eval_cache"))"
+    rm -rf "${CACHE_ROOT}/eval_cache"
+  fi
 }
 
 model_basename() {
@@ -402,9 +468,10 @@ run_bvsq() {
           --rbvt_budget_p "${RBVT_BUDGET_P}" \
           --rbvt_target_ratio "${RBVT_TARGET_RATIO}" \
           --row_chunk "${RBVT_ROW_CHUNK}" \
-          --gap_floor "${RBVT_GAP_FLOOR}" \
+        --gap_floor "${RBVT_GAP_FLOOR}" \
           "${overwrite_args[@]}"
       fi
+      cleanup_path_if_unkept "${base_out}" "BVSQ greedy_l1 base used for RBVT"
     else
       run_bvsq_base "${variant}" "${out}"
     fi
@@ -455,6 +522,7 @@ eval_lut_method() {
       --output_file "${lm_file}" \
       "${limit_args[@]}"
   fi
+  cleanup_path_if_unkept "${lut_dir}" "dense LUT after eval (${method})"
 }
 
 run_gptvq() {
@@ -504,6 +572,8 @@ log "Output root: ${OUTPUT_ROOT}"
 log "Models: ${MODEL_SPECS}"
 log "Bits: ${BITS}"
 log "lm-eval tasks: ${LM_EVAL_TASKS}; gen_kwargs=${LM_EVAL_GEN_KWARGS}"
+log "Disk cleanup: before_run=${DISK_CLEAN_BEFORE_RUN}, keep_dense_luts=${DISK_KEEP_DENSE_LUTS}, clean_lut_intermediates=${DISK_CLEAN_LUT_INTERMEDIATES}, clean_eval_cache_after_model=${DISK_CLEAN_EVAL_CACHE_AFTER_MODEL}"
+preflight_disk_cleanup
 
 for spec in "${MODEL_ARRAY[@]}"; do
   if [[ "${spec}" != *=* ]]; then
@@ -537,7 +607,10 @@ for spec in "${MODEL_ARRAY[@]}"; do
     if [[ "${RUN_GPTVQ}" == "1" ]]; then
       run_gptvq "${label}" "${model}" "${bits}" "${token_path}"
     fi
+    cleanup_lut_intermediates "${run_root}"
+    log_disk
   done
+  cleanup_eval_cache_after_model
 done
 
 log "Done. Results under ${OUTPUT_ROOT}"
