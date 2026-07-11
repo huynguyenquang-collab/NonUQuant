@@ -1,4 +1,4 @@
-from transformers import AutoModelForCausalLM, LlamaForCausalLM, OPTForCausalLM
+from transformers import AutoModelForCausalLM, OPTForCausalLM
 
 
 def load_model(model, model_type, cache_dir=None):
@@ -10,17 +10,20 @@ def load_model(model, model_type, cache_dir=None):
             trust_remote_code=True,
         )
     else:
-        model = LlamaForCausalLM.from_pretrained(
-            model, torch_dtype="auto", cache_dir=cache_dir
+        model = AutoModelForCausalLM.from_pretrained(
+            model, torch_dtype="auto", cache_dir=cache_dir, trust_remote_code=True
         )
     return model
 
 
 def parse_model(model):
-    if "opt" in str(type(model)).lower():
+    model_text = str(type(model)).lower()
+    if "opt" in model_text:
         model_type = "opt"
-    elif "mistral" in str(type(model)).lower():
+    elif "mistral" in model_text:
         model_type = "mistral"
+    elif "qwen" in model_text:
+        model_type = "qwen"
     else:
         # additional rules should be added to support other models
         model_type = "llama"
@@ -33,7 +36,7 @@ def get_module_names(model_type):
     if model_type == "opt":
         return ["q", "k", "v", "o", "up", "down"]
     else:
-        assert model_type == "llama" or model_type == "mistral"
+        assert model_type == "llama" or model_type == "mistral" or model_type == "qwen"
         return ["q", "k", "v", "o", "gate", "up", "down"]
 
 
@@ -48,8 +51,8 @@ def get_modules(layer, model_type):
             layer.fc2,
         ]
     else:
-        # llama or vicuna
-        assert model_type == "llama" or model_type == "mistral"
+        # llama, mistral, qwen
+        assert model_type == "llama" or model_type == "mistral" or model_type == "qwen"
         modules = [
             layer.self_attn.q_proj,
             layer.self_attn.k_proj,
@@ -63,6 +66,10 @@ def get_modules(layer, model_type):
     return modules
 
 
+def get_named_modules(layer, model_type):
+    return list(zip(get_module_names(model_type), get_modules(layer, model_type)))
+
+
 def get_sequential(model_type):
     if model_type == "opt":
         return [
@@ -74,7 +81,7 @@ def get_sequential(model_type):
             "fc2",
         ]
     else:
-        assert model_type == "llama" or model_type == "mistral"
+        assert model_type == "llama" or model_type == "mistral" or model_type == "qwen"
         return [
             "self_attn.q_proj",
             "self_attn.k_proj",
@@ -86,11 +93,15 @@ def get_sequential(model_type):
         ]
 
 
+def get_named_sequential(layer, model_type):
+    return list(zip(get_module_names(model_type), get_sequential(model_type)))
+
+
 def get_model(model, model_type):
     if model_type == "opt":
         return model.model.decoder
     else:
-        assert model_type == "llama" or model_type == "mistral"
+        assert model_type == "llama" or model_type == "mistral" or model_type == "qwen"
         return model.model
 
 
@@ -99,7 +110,7 @@ def get_layers(model, model_type):
     if model_type == "opt":
         return _model.layers
     else:
-        assert model_type == "llama" or model_type == "mistral"
+        assert model_type == "llama" or model_type == "mistral" or model_type == "qwen"
         return _model.layers
 
 
@@ -107,7 +118,7 @@ def get_layers_name(model_type):
     if model_type == "opt":
         return "model.decoder.layers"
     else:
-        assert model_type == "llama" or model_type == "mistral"
+        assert model_type == "llama" or model_type == "mistral" or model_type == "qwen"
         return "model.layers"
 
 
@@ -116,7 +127,7 @@ def get_embedding(model, model_type):
     if model_type == "opt":
         return [_model.embed_tokens, _model.embed_positions]
     else:
-        assert model_type == "llama" or model_type == "mistral"
+        assert model_type == "llama" or model_type == "mistral" or model_type == "qwen"
         return [_model.embed_tokens]
 
 
@@ -125,5 +136,5 @@ def get_norm(model, model_type):
     if model_type == "opt":
         return _model.final_layer_norm
     else:
-        assert model_type == "llama" or model_type == "mistral"
+        assert model_type == "llama" or model_type == "mistral" or model_type == "qwen"
         return _model.norm

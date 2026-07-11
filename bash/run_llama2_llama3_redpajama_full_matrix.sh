@@ -57,6 +57,7 @@ NF_METHOD="${NF_METHOD:-rtn}"
 LEAN_SQUEEZE_METHODS="${LEAN_SQUEEZE_METHODS:-rtn}"
 LEAN_SQUEEZE_CODEBOOKS="${LEAN_SQUEEZE_CODEBOOKS:-leanquant squeezellm}"
 SQUEEZELLM_MODE="${SQUEEZELLM_MODE:-dense-only}"
+SQUEEZELLM_NUQ_SCRIPT="${SQUEEZELLM_NUQ_SCRIPT:-quantization/nuq.py}"
 LEANQUANT_EXPONENT="${LEANQUANT_EXPONENT:-4.0}"
 LEANQUANT_PERCDAMP="${LEANQUANT_PERCDAMP:-0.1}"
 
@@ -362,7 +363,7 @@ ensure_sqllm_lut_stack() {
     fi
     if [[ "${OVERWRITE}" == "1" || ! -d "${sq}/lut" ]]; then
       log "Building SqueezeLLM LUT init for LNQ/BVSQ stack: ${label} ${bits}-bit"
-      "${PYTHON_BIN}" quantization/nuq.py \
+      "${PYTHON_BIN}" "${SQUEEZELLM_NUQ_SCRIPT}" \
         --model_type "${MODEL_TYPE}" \
         --model "${chunks}" \
         --gradient "${fisher}" \
